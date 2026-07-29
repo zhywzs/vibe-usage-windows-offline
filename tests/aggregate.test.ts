@@ -96,25 +96,34 @@ describe("summarize", () => {
 });
 
 describe("buildChartData", () => {
-  it("daily mode fills every slot and aggregates by UTC dayKey", () => {
-    const now = new Date("2026-07-03T12:00:00");
-    const data = buildChartData(
-      [bucket({ bucketStart: "2026-07-01T04:00:00.000Z", inputTokens: 7 })],
-      [session({ firstMessageAt: "2026-07-01T04:00:00.000Z", activeSeconds: 600 })],
-      "7D",
-      7,
-      null,
-      now,
-    );
-    expect(data).toHaveLength(7);
-    const day = data.find((d) => d.id === "2026-07-01")!;
-    expect(day.input).toBe(7);
-    expect(day.activeMinutes).toBe(10);
-    // reasoning folded into output
-    expect(day.output).toBe(50 + 10);
-    expect(barTotal(day)).toBe(7 + 60 + 200);
-    // empty slots exist with zeros
-    expect(data.filter((d) => barTotal(d) === 0).length).toBe(6);
+  it("daily mode fills every slot and aggregates by local calendar day", () => {
+    const originalTz = process.env.TZ;
+    try {
+      process.env.TZ = "Asia/Shanghai";
+      const now = new Date("2026-07-03T12:00:00");
+      const data = buildChartData(
+        // The API represents Asia/Shanghai local midnight as the previous UTC
+        // date. Grouping by the raw ISO prefix would put this data on July 1.
+        [bucket({ bucketStart: "2026-07-01T16:00:00.000Z", inputTokens: 7 })],
+        [session({ firstMessageAt: "2026-07-01T16:00:00.000Z", activeSeconds: 600 })],
+        "7D",
+        7,
+        null,
+        now,
+      );
+      expect(data).toHaveLength(7);
+      const day = data.find((d) => d.id === "2026-07-02")!;
+      expect(day.input).toBe(7);
+      expect(day.activeMinutes).toBe(10);
+      // reasoning folded into output
+      expect(day.output).toBe(50 + 10);
+      expect(barTotal(day)).toBe(7 + 60 + 200);
+      // empty slots exist with zeros
+      expect(data.filter((d) => barTotal(d) === 0).length).toBe(6);
+    } finally {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
   });
 
   it("24H mode produces a 24-slot rolling window; today grows from midnight", () => {

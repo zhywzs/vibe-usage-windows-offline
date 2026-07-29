@@ -22,9 +22,18 @@ export function computedTotal(b: UsageBucket): number {
   return b.inputTokens + b.outputTokens + b.reasoningOutputTokens + b.cachedInputTokens;
 }
 
-/** Day string (yyyy-MM-dd) for grouping — UTC prefix, same as Swift `bucketStart.prefix(10)` */
+function localDateKey(value: string): string {
+  const date = new Date(value);
+  if (isNaN(date.getTime())) return value.slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/** Local calendar day for grouping, matching the web dashboard's timezone semantics. */
 export function bucketDayKey(b: UsageBucket): string {
-  return b.bucketStart.slice(0, 10);
+  return localDateKey(b.bucketStart);
 }
 
 /** Hour string (yyyy-MM-ddTHH) for hourly grouping — UTC prefix(13) */
@@ -51,7 +60,7 @@ export interface UsageSession {
 }
 
 export function sessionDayKey(s: UsageSession): string {
-  return s.firstMessageAt.slice(0, 10);
+  return localDateKey(s.firstMessageAt);
 }
 
 export function sessionHourKey(s: UsageSession): string {
