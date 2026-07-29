@@ -27,13 +27,25 @@ import { aggregateToBuckets, extractSessions } from './index.js';
  *    with a different envelope (StatusUpdate.payload.token_usage, float-second
  *    `timestamp`) and the model in ~/.kimi/config.toml. Kept for users who have
  *    not migrated; see parseLegacyKimi() below.
+ *
+ * Both stores are always parsed and merged. `kimi migrate` translates legacy
+ * context.jsonl into the new wire format but DROPS the `_usage` records, so
+ * historical token usage only ever exists in the legacy store — parsing both
+ * cannot double-count, while skipping legacy whenever ~/.kimi-code has any
+ * session silently loses a migrated user's entire history.
  */
 
 // ---------------------------------------------------------------------------
 // Current format: ~/.kimi-code
 // ---------------------------------------------------------------------------
 
-const KIMI_CODE_DIR = join(homedir(), '.kimi-code');
+// VIBE_USAGE_KIMI_CODE_DIR overrides the root (test hook). Otherwise resolve
+// the data root the same way the CLI itself does: $KIMI_CODE_HOME, then
+// ~/.kimi-code. Ignoring KIMI_CODE_HOME means users with a custom home get
+// zero usage parsed.
+const KIMI_CODE_DIR = process.env.VIBE_USAGE_KIMI_CODE_DIR?.trim()
+  || process.env.KIMI_CODE_HOME?.trim()
+  || join(homedir(), '.kimi-code');
 const KIMI_CODE_SESSIONS_DIR = join(KIMI_CODE_DIR, 'sessions');
 const KIMI_CODE_SESSION_INDEX = join(KIMI_CODE_DIR, 'session_index.jsonl');
 
@@ -74,6 +86,11 @@ function loadSessionIndex() {
 function projectFromBucketName(name) {
   const m = /^wd_(.+)_[0-9a-f]+$/.exec(name);
   return m ? m[1] : name;
+}
+
+function usageTokens(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 // Collect every agents/<id>/wire.jsonl under sessions/wd_<...>/session_<...>/.
@@ -148,29 +165,44 @@ function parseKimiCode() {
       try { evt = JSON.parse(line); } catch { continue; }
 
       const type = evt.type;
-      // Top-level `time` is integer milliseconds since epoch.
-      const time = typeof evt.time === 'number' ? evt.time : null;
+      // Top-level `time` is integer milliseconds since epoch. Validate it:
+      // JSON numbers can overflow to Infinity (e.g. 1e400 parses fine), and
+      // any out-of-range value yields an Invalid Date that later crashes
+      // aggregateToBuckets() (RangeError from toISOString) — one corrupt line
+      // would take down this tool's entire parse.
+      const time = typeof evt.time === 'number' && Number.isFinite(evt.time) ? evt.time : null;
+      const ts = time !== null ? new Date(time) : null;
+      const tsValid = ts !== null && !isNaN(ts.getTime());
 
-      // Session timing: a user turn vs. anything the model emits.
-      if (type === 'turn.prompt' && evt.origin?.kind === 'user' && time) {
-        const ts = new Date(time);
-        if (!isNaN(ts.getTime())) {
-          sessionEvents.push({ sessionId: wireFile, source: 'kimi-code', project, timestamp: ts, role: 'user' });
+      // Session timing: a user turn vs. anything the model emits. All agent
+      // wires under one sessionDir belong to the same logical user session;
+      // grouping by wireFile would create separate zero-user sessions for
+      // subagents instead of attributing their work to the parent turn.
+      if (type === 'turn.prompt' && evt.origin?.kind === 'user') {
+        if (tsValid) {
+          sessionEvents.push({ sessionId: sessionDir, source: 'kimi-code', project, timestamp: ts, role: 'user' });
         }
         continue;
       }
 
       if (type !== 'usage.record') continue;
+      // Every usage.record is a delta. `turn` is the normal successful-step
+      // scope; `session` is used for other real model calls (for example
+      // retry/compaction work), not for a cumulative summary. Count both.
+      // No valid timestamp → can't bucket accurately. Skip instead of stamping
+      // "now": this parser is stateless, so a "now" fallback would re-key the
+      // same record into a fresh 30-min bucket on every sync (duplicates).
+      if (!tsValid) continue;
 
       const usage = evt.usage;
       if (!usage) continue;
 
-      const inputTokens = usage.inputOther || 0;
-      const outputTokens = usage.output || 0;
-      const cachedInputTokens = usage.inputCacheRead || 0;
+      // Cache creation is billed non-cached input, matching the common bucket
+      // model used by the other parsers; cache reads stay in their own field.
+      const inputTokens = usageTokens(usage.inputOther) + usageTokens(usage.inputCacheCreation);
+      const outputTokens = usageTokens(usage.output);
+      const cachedInputTokens = usageTokens(usage.inputCacheRead);
       if (!inputTokens && !outputTokens && !cachedInputTokens) continue;
-
-      const ts = time ? new Date(time) : new Date();
 
       entries.push({
         source: 'kimi-code',
@@ -185,9 +217,7 @@ function parseKimiCode() {
 
       // Each usage.record marks an assistant step completing — use it as an
       // assistant timing event so active-time math has both sides of a turn.
-      if (time && !isNaN(ts.getTime())) {
-        sessionEvents.push({ sessionId: wireFile, source: 'kimi-code', project, timestamp: ts, role: 'assistant' });
-      }
+      sessionEvents.push({ sessionId: sessionDir, source: 'kimi-code', project, timestamp: ts, role: 'assistant' });
     }
   }
 
@@ -198,7 +228,8 @@ function parseKimiCode() {
 // Legacy format: ~/.kimi  (kept for users who haven't migrated to ~/.kimi-code)
 // ---------------------------------------------------------------------------
 
-const KIMI_DIR = join(homedir(), '.kimi');
+// VIBE_USAGE_KIMI_DIR overrides the legacy root (test hook).
+const KIMI_DIR = process.env.VIBE_USAGE_KIMI_DIR?.trim() || join(homedir(), '.kimi');
 const KIMI_SESSIONS_DIR = join(KIMI_DIR, 'sessions');
 const KIMI_WORKDIRS_JSON = join(KIMI_DIR, 'kimi.json');
 const KIMI_CONFIG_TOML = join(KIMI_DIR, 'config.toml');
@@ -342,7 +373,8 @@ function parseLegacyKimi() {
 
       const tokenUsage = payload.token_usage;
       if (!tokenUsage) continue;
-      if (!tokenUsage.input_other && !tokenUsage.output) continue;
+      if (!tokenUsage.input_other && !tokenUsage.output
+        && !tokenUsage.input_cache_read && !tokenUsage.input_cache_creation) continue;
 
       const messageId = payload.message_id;
       if (messageId) {
@@ -350,14 +382,21 @@ function parseLegacyKimi() {
         seenMessageIds.add(messageId);
       }
 
-      const ts = lastTimestamp ? new Date(lastTimestamp) : new Date();
+      // No valid timestamp → skip instead of stamping "now": this parser is
+      // stateless, so a "now" fallback would re-key the same record into a
+      // fresh 30-min bucket on every sync (duplicates).
+      if (!lastTimestamp) continue;
+      const ts = new Date(lastTimestamp);
+      if (isNaN(ts.getTime())) continue;
 
       entries.push({
         source: 'kimi-code',
         model: currentModel,
         project,
         timestamp: ts,
-        inputTokens: tokenUsage.input_other || 0,
+        // Cache creation is billed non-cached input, matching the current
+        // parser and the common bucket model used by the other parsers.
+        inputTokens: (tokenUsage.input_other || 0) + (tokenUsage.input_cache_creation || 0),
         outputTokens: tokenUsage.output || 0,
         cachedInputTokens: tokenUsage.input_cache_read || 0,
         reasoningOutputTokens: 0,
@@ -369,9 +408,13 @@ function parseLegacyKimi() {
 }
 
 export async function parse() {
-  // Prefer the current ~/.kimi-code layout; fall back to legacy ~/.kimi only
-  // when no kimi-code sessions exist, so migrated users aren't double-counted.
+  // Always parse both stores and merge (see the header comment): legacy usage
+  // is never carried into ~/.kimi-code by `kimi migrate`, so a migrated user's
+  // history exists only in ~/.kimi.
   const current = parseKimiCode();
-  if (current) return current;
-  return parseLegacyKimi();
+  const legacy = parseLegacyKimi();
+  return {
+    buckets: [...(current?.buckets ?? []), ...legacy.buckets],
+    sessions: [...(current?.sessions ?? []), ...legacy.sessions],
+  };
 }

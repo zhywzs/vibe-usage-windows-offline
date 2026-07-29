@@ -10,11 +10,22 @@ const INITIAL_DELAY = 1000;
 // guaranteeing no uncompressed request ever leaves the client.
 const GZIP_MIN_BYTES = 0;
 
+export function retryDelayMs(attempt, random = Math.random) {
+  const ceiling = INITIAL_DELAY * 2 ** attempt;
+  // Equal jitter keeps a real backoff floor while preventing every desktop
+  // client from retrying a shared outage on the same 1s / 2s boundaries.
+  return Math.round(ceiling / 2 + random() * ceiling / 2);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export async function ingest(apiUrl, apiKey, buckets, opts, sessions) {
   let lastError;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      return await _send(apiUrl, apiKey, buckets, opts?.onProgress, sessions);
+      return await _send(apiUrl, apiKey, buckets, opts, sessions);
     } catch (err) {
       lastError = err;
       // Don't retry auth errors or client errors
@@ -22,22 +33,29 @@ export async function ingest(apiUrl, apiKey, buckets, opts, sessions) {
         throw err;
       }
       if (attempt < MAX_RETRIES - 1) {
-        const delay = INITIAL_DELAY * 2 ** attempt;
-        await new Promise(r => setTimeout(r, delay));
+        await sleep(retryDelayMs(attempt));
       }
     }
   }
   throw lastError;
 }
 
-function _send(apiUrl, apiKey, buckets, onProgress, sessions) {
+export function encodeIngestBody(buckets, opts, sessions) {
+  const payload = { buckets };
+  if (sessions && sessions.length > 0) payload.sessions = sessions;
+  if (opts?.client) payload.client = opts.client;
+  const raw = Buffer.from(JSON.stringify(payload));
+  const useGzip = raw.length >= GZIP_MIN_BYTES;
+  return {
+    body: useGzip ? gzipSync(raw) : raw,
+    useGzip,
+  };
+}
+
+function _send(apiUrl, apiKey, buckets, opts, sessions) {
   return new Promise((resolve, reject) => {
     const url = new URL('/api/usage/ingest', apiUrl);
-    const payload = { buckets };
-    if (sessions && sessions.length > 0) payload.sessions = sessions;
-    const raw = Buffer.from(JSON.stringify(payload));
-    const useGzip = raw.length >= GZIP_MIN_BYTES;
-    const body = useGzip ? gzipSync(raw) : raw;
+    const { body, useGzip } = encodeIngestBody(buckets, opts, sessions);
     const totalBytes = body.length;
     const mod = url.protocol === 'https:' ? https : http;
 
@@ -89,7 +107,7 @@ function _send(apiUrl, apiKey, buckets, onProgress, sessions) {
       while (ok && sent < totalBytes) {
         const slice = body.subarray(sent, sent + CHUNK);
         sent += slice.length;
-        if (onProgress) onProgress(sent, totalBytes);
+        if (opts?.onProgress) opts.onProgress(sent, totalBytes);
         ok = req.write(slice);
       }
       if (sent < totalBytes) {
@@ -214,13 +232,36 @@ function _jsonRequest(apiUrl, path, method, body, timeoutMs) {
 
 /**
  * GET user settings from the vibecafe API.
- * Returns null on any failure (network, auth, timeout) — caller should fail-safe.
+ * Returns null after transient failures are exhausted. A 401 remains distinct
+ * so callers can surface invalid credentials instead of calling it an outage.
  * @param {string} apiUrl
  * @param {string} apiKey
  * @returns {Promise<{uploadProject: boolean} | null>}
  */
-export function fetchSettings(apiUrl, apiKey) {
-  return new Promise((resolve) => {
+export async function fetchSettings(apiUrl, apiKey, retry = {}) {
+  const wait = retry.sleep ?? sleep;
+  const random = retry.random ?? Math.random;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      return await fetchSettingsOnce(apiUrl, apiKey);
+    } catch (err) {
+      if (err.message === 'UNAUTHORIZED') throw err;
+      // Retrying a permanent client response cannot make it valid. 429 is the
+      // exception: it is transient load shedding and benefits from backoff.
+      if (err.statusCode >= 400 && err.statusCode < 500 && err.statusCode !== 429) {
+        return null;
+      }
+      if (attempt < MAX_RETRIES - 1) {
+        await wait(retryDelayMs(attempt, random));
+      }
+    }
+  }
+  return null;
+}
+
+function fetchSettingsOnce(apiUrl, apiKey) {
+  return new Promise((resolve, reject) => {
     const url = new URL('/api/usage/settings', apiUrl);
     const mod = url.protocol === 'https:' ? https : http;
 
@@ -234,20 +275,31 @@ export function fetchSettings(apiUrl, apiKey) {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
+        if (res.statusCode === 401) {
+          reject(new Error('UNAUTHORIZED'));
+          return;
+        }
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          resolve(null);
+          const err = new Error(`HTTP ${res.statusCode}: ${data}`);
+          err.statusCode = res.statusCode;
+          reject(err);
           return;
         }
         try {
-          resolve(JSON.parse(data));
+          const settings = JSON.parse(data);
+          if (typeof settings?.uploadProject !== 'boolean') {
+            reject(new Error('Invalid settings response'));
+            return;
+          }
+          resolve(settings);
         } catch {
-          resolve(null);
+          reject(new Error('Invalid settings response'));
         }
       });
     });
 
-    req.on('error', () => resolve(null));
-    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('Settings request timed out')); });
     req.end();
   });
 }
