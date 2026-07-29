@@ -13,8 +13,12 @@ afterEach(() => {
 });
 
 test("vendored CLI reports its real version and the Windows App identity", async () => {
+  const appPackage = JSON.parse(readFileSync("package.json", "utf-8"));
+  const vendoredPackage = JSON.parse(
+    readFileSync("src-tauri/resources/cli/package.json", "utf-8"),
+  );
   process.env.VIBE_USAGE_SURFACE = "windows-app";
-  process.env.VIBE_USAGE_SURFACE_VERSION = "0.5.10";
+  process.env.VIBE_USAGE_SURFACE_VERSION = appPackage.version;
   vi.resetModules();
 
   const { createSyncClient } = await import(
@@ -22,9 +26,9 @@ test("vendored CLI reports its real version and the Windows App identity", async
   );
   const client = createSyncClient({ hostname: "windows-pc" });
 
-  expect(client.collectorVersion).toBe("0.10.2");
+  expect(client.collectorVersion).toBe(vendoredPackage.version);
   expect(client.surface).toBe("windows-app");
-  expect(client.surfaceVersion).toBe("0.5.10");
+  expect(client.surfaceVersion).toBe(appPackage.version);
 });
 
 test("Tauri sync injects the Windows App surface and package version", () => {
