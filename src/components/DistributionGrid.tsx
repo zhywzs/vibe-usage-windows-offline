@@ -11,6 +11,7 @@ import {
   formatSlicePercent,
 } from "../lib/formatters";
 import { UsageBucket } from "../lib/types";
+import { MiddleTruncateLabel } from "./MiddleTruncateLabel";
 
 type MetricMode = "tokens" | "cost";
 
@@ -75,9 +76,11 @@ function DonutCard({
                   className="h-[7px] w-[7px] shrink-0 rounded-full"
                   style={{ background: slice.color }}
                 />
-                <span className="min-w-0 grow truncate text-[11px]" style={{ color: "#B3B3B3" }}>
-                  {slice.label}
-                </span>
+                <MiddleTruncateLabel
+                  label={slice.label}
+                  className="min-w-0 grow text-[11px]"
+                  style={{ color: "#B3B3B3" }}
+                />
                 <span className="shrink-0 font-mono text-[11px]" style={{ color: "#8C8C8C" }}>
                   {mode === "tokens" ? formatNumber(slice.tokens) : formatCost(slice.cost)}
                 </span>

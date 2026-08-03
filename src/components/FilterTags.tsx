@@ -6,6 +6,7 @@ import { useAppState } from "../state/AppStateContext";
 import { FilterState, filtersAreEmpty, TIME_RANGE_ORDER, timeRangeLabel } from "../lib/types";
 import { groupModelsByFamily } from "../lib/modelFamilies";
 import { localDayKey } from "../lib/formatters";
+import { MiddleTruncateLabel } from "./MiddleTruncateLabel";
 
 type Dimension = "hostname" | "source" | "model" | "project";
 
@@ -453,13 +454,11 @@ function CheckRowContent({
         {isSelected && <Check size={9} strokeWidth={3.5} color="#000000" />}
         {!isSelected && isMixed && <span className="h-[1.5px] w-[7px] bg-black" />}
       </span>
-      <span
-        className="min-w-0 truncate text-xs"
+      <MiddleTruncateLabel
+        label={title}
+        className="min-w-0 text-xs"
         style={{ color: on ? "#FFFFFF" : "#9E9E9E" }}
-        title={title}
-      >
-        {title}
-      </span>
+      />
     </div>
   );
 }
