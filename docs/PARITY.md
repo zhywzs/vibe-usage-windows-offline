@@ -37,6 +37,7 @@
 | `SummaryCardsView` | `components/SummaryCards.tsx` |
 | `BarChartView` | `components/TrendChart.tsx`（自绘 div 堆叠条） |
 | `DistributionChartsView` | `components/DistributionGrid.tsx`（自绘 SVG donut） |
+| 长名字 `.truncationMode(.middle)` + `.help()`（分布图例/筛选选项，同前缀项目名区分信息在尾部） | `components/MiddleTruncateLabel.tsx`（head 截断 + tail 6 字符不收缩 + `title` 悬浮全名） |
 | `SettingsView` (NSWindow 460×480) | `SettingsApp`（独立 WebView 窗口 460×620；Windows 保持首屏展示「关于」区域） |
 | `AppState` | `state/AppStateContext.tsx` + Rust `AppCtx` |
 | `APIClient` | `services/api_client.rs` |
