@@ -1,6 +1,8 @@
 // Cases translated 1:1 from Formatters.swift semantics.
 import { describe, expect, it } from "vitest";
 import {
+  formatChineseTokens,
+  formatCnyCost,
   formatCost,
   formatDateShort,
   formatDuration,
@@ -34,6 +36,43 @@ describe("formatCost", () => {
     expect(formatCost(0.01)).toBe("$0.01");
     expect(formatCost(12.34)).toBe("$12.34");
     expect(formatCost(117.07)).toBe("$117.07");
+  });
+});
+
+describe("formatCnyCost", () => {
+  it("converts USD at the fixed 7:1 display rate", () => {
+    expect(formatCnyCost(0)).toBe("￥0.00");
+    expect(formatCnyCost(0.0012)).toBe("￥0.0084");
+    expect(formatCnyCost(12.34)).toBe("￥86.38");
+  });
+});
+
+describe("formatChineseTokens", () => {
+  it("uses the requested Chinese compact units", () => {
+    expect(formatChineseTokens(0)).toBe("0");
+    expect(formatChineseTokens(999)).toBe("999");
+    expect(formatChineseTokens(1_000)).toBe("1千");
+    expect(formatChineseTokens(12_340)).toBe("1.23万");
+    expect(formatChineseTokens(20_000_000)).toBe("2千万");
+    expect(formatChineseTokens(200_000_000)).toBe("2亿");
+    expect(formatChineseTokens(3_000_000_000)).toBe("30亿");
+    expect(formatChineseTokens(100_000_000_000)).toBe("1千亿");
+    expect(formatChineseTokens(1_000_000_000_000)).toBe("1万亿");
+    expect(formatChineseTokens(140_000_000_000_000)).toBe("140万亿");
+  });
+
+  it("rounds to three significant digits and re-evaluates unit boundaries", () => {
+    expect(formatChineseTokens(1_234)).toBe("1.23千");
+    expect(formatChineseTokens(9_995)).toBe("1万");
+    expect(formatChineseTokens(99_950_000)).toBe("1亿");
+    expect(formatChineseTokens(999_500_000_000)).toBe("1万亿");
+  });
+
+  it("does not emit 兆 and handles invalid values", () => {
+    expect(formatChineseTokens(Number.NaN)).toBe("—");
+    expect(formatChineseTokens(Number.POSITIVE_INFINITY)).toBe("—");
+    expect(formatChineseTokens(-1)).toBe("—");
+    expect(formatChineseTokens(1_000_000_000_000)).not.toContain("兆");
   });
 });
 

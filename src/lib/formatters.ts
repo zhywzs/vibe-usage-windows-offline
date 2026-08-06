@@ -18,6 +18,61 @@ export function formatCost(cost: number): string {
   return `$${cost.toFixed(2)}`;
 }
 
+/** Format an estimated USD cost as CNY using the product's fixed display rate. */
+export function formatCnyCost(cost: number): string {
+  const cny = cost * 7;
+  if (cny === 0) return "￥0.00";
+  if (cny < 0.01) return `￥${cny.toFixed(4)}`;
+  return `￥${cny.toFixed(2)}`;
+}
+
+const CHINESE_TOKEN_UNITS = [
+  { factor: 1, suffix: "" },
+  { factor: 1_000, suffix: "千" },
+  { factor: 10_000, suffix: "万" },
+  { factor: 10_000_000, suffix: "千万" },
+  { factor: 100_000_000, suffix: "亿" },
+  { factor: 100_000_000_000, suffix: "千亿" },
+  { factor: 1_000_000_000_000, suffix: "万亿" },
+] as const;
+
+function roundToThreeSignificantDigits(value: number): number {
+  const significantDigitFactor = 10 ** (3 - Math.floor(Math.log10(Math.abs(value))) - 1);
+  const floatingPointGuard = Number.EPSILON * Math.max(1, Math.abs(value)) * 10;
+  return Math.round((value + floatingPointGuard) * significantDigitFactor) / significantDigitFactor;
+}
+
+/**
+ * Format a token count with the compact zh-CN product convention:
+ * integer → 千 → 万 → 千万 → 亿 → 千亿 → 万亿.
+ * The rounded result is re-evaluated so values such as 999.5 万 become 1 千万.
+ */
+export function formatChineseTokens(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens < 0) return "—";
+
+  const count = Math.trunc(tokens);
+  if (count < 1_000) return String(count);
+
+  let unitIndex = CHINESE_TOKEN_UNITS.length - 1;
+  while (unitIndex > 0 && count < CHINESE_TOKEN_UNITS[unitIndex].factor) {
+    unitIndex -= 1;
+  }
+
+  while (true) {
+    const unit = CHINESE_TOKEN_UNITS[unitIndex];
+    const roundedCoefficient = roundToThreeSignificantDigits(count / unit.factor);
+    const roundedCount = roundedCoefficient * unit.factor;
+    const nextUnit = CHINESE_TOKEN_UNITS[unitIndex + 1];
+
+    if (nextUnit && roundedCount >= nextUnit.factor) {
+      unitIndex += 1;
+      continue;
+    }
+
+    return `${roundedCoefficient}${unit.suffix}`;
+  }
+}
+
 /** Format date for chart axis: "2026-02-25" → "2/25" */
 export function formatDateShort(dateString: string): string {
   const parts = dateString.split("-");
