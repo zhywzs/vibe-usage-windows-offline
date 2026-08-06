@@ -37,7 +37,7 @@ function isDaemonPlatform() {
 }
 
 export async function runInit(options = {}) {
-  const { apiKey: providedKey } = options;
+  const { apiKey: providedKey, codexExtraHome } = options;
 
   console.log(bigHeader());
 
@@ -46,7 +46,7 @@ export async function runInit(options = {}) {
     if (providedKey && existing.apiKey === providedKey) {
       console.log(dim('已配置同一个 Key，直接同步数据。'));
       console.log();
-      await runSync();
+      await runSync({ codexExtraHome });
       return;
     }
     const answer = await prompt('检测到已有配置，是否覆盖? (y/N) ');
@@ -86,10 +86,11 @@ export async function runInit(options = {}) {
     apiKey,
     apiUrl,
     hostname: host,
+    ...(existing?.codexExtraHome ? { codexExtraHome: existing.codexExtraHome } : {}),
   };
   saveConfig(config);
 
-  const tools = detectInstalledTools();
+  const tools = detectInstalledTools({ codexExtraHome: config.codexExtraHome });
   if (tools.length > 0) {
     console.log(success(`检测到 ${tools.length} 款工具: ${dim(tools.map(t => t.name).join(' · '))}`));
   } else {
@@ -100,7 +101,7 @@ export async function runInit(options = {}) {
   console.log(divider());
   console.log();
 
-  await runSync();
+  await runSync({ codexExtraHome });
 
   if (isDaemonPlatform()) {
     if (process.stdin.isTTY) {

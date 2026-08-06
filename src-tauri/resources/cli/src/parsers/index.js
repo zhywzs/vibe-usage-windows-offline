@@ -4,6 +4,7 @@ import { parse as parseCline } from './cline.js';
 import { parse as parseCodex } from './codex.js';
 import { parse as parseCopilotCli } from './copilot-cli.js';
 import { parse as parseCursor } from './cursor.js';
+import { parse as parseDimAgent } from './dimagent.js';
 import { parse as parseRooCode } from './roo-code.js';
 import { parse as parseGeminiCli } from './gemini-cli.js';
 import { parse as parseGrok } from './grok.js';
@@ -16,6 +17,7 @@ import { parse as parseDroid } from './droid.js';
 import { parse as parseAntigravity } from './antigravity.js';
 import { parse as parseHermes } from './hermes.js';
 import { parse as parseKiro } from './kiro.js';
+import { parse as parseMimocode } from './mimocode.js';
 import { parse as parsePiCodingAgent } from './pi-coding-agent.js';
 import { parse as parseZcode } from './zcode.js';
 import { parse as parseTraeCli } from './trae-cli.js';
@@ -26,6 +28,7 @@ export const parsers = {
   'grok': parseGrok,
   'copilot-cli': parseCopilotCli,
   'cursor': parseCursor,
+  'dimagent': parseDimAgent,
   'gemini-cli': parseGeminiCli,
   'opencode': parseOpencode,
   'openclaw': parseOpenclaw,
@@ -38,6 +41,7 @@ export const parsers = {
   'trae-cli': parseTraeCli,
   'hermes': parseHermes,
   'kiro': parseKiro,
+  'mimocode': parseMimocode,
   'cline': parseCline,
   'roo-code': parseRooCode,
   'zcode': parseZcode,
