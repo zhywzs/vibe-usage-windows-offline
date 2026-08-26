@@ -68,6 +68,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_status,
             commands::fetch_usage,
+            commands::get_pricing_status,
             commands::trigger_sync,
             commands::get_sync_state,
             commands::get_rate_limits,

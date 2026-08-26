@@ -5,6 +5,7 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import {
   AppSettings,
   AppStatus,
+  PricingStatus,
   ProviderRateLimit,
   SyncState,
   UpdateInfo,
@@ -16,6 +17,11 @@ export const api = {
   getAppStatus: () => invoke<AppStatus>("get_app_status"),
 
   fetchUsage: (query: UsageQuery) => invoke<UsageResponse>("fetch_usage", { query }),
+
+  // Pricing -----------------------------------------------------------------------
+  /** Price-table status; `force` triggers a real refresh attempt whose
+   *  outcome (ok or error) is reported instead of silently falling back. */
+  getPricingStatus: (force: boolean) => invoke<PricingStatus>("get_pricing_status", { force }),
 
   // Sync ---------------------------------------------------------------------
   triggerSync: () => invoke<void>("trigger_sync"),

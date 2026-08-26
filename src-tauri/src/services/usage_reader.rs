@@ -1,8 +1,8 @@
-//! Local usage reader — the offline replacement for the old vibecafe.ai
-//! usage endpoint. Spawns the vendored CLI's `usage` command
-//! (`node <resources>/cli/bin/vibe-usage.js usage …`), which reads
-//! ~/.vibe-usage/usage.json, estimates costs from the bundled price table,
-//! and emits the same JSON shape the dashboard used to receive.
+//! Local CLI bridge — the offline replacement for the old vibecafe.ai
+//! endpoints. Spawns the vendored CLI (`node <resources>/cli/bin/vibe-usage.js`)
+//! and returns parsed JSON:
+//!   usage  <args>   → local store buckets/sessions (+ estimatedCost)
+//!   prices <args>   → price-table status (source/freshness/coverage)
 
 use crate::process_utils;
 use crate::state::AppCtx;
@@ -13,7 +13,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use vibe_core::runtime::{self, Runtime};
 
-pub const USAGE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -41,6 +41,24 @@ impl UsageQuery {
 /// Query local usage via the vendored CLI. Returns the parsed JSON payload
 /// (buckets/sessions/hasAnyData) verbatim for the frontend.
 pub async fn fetch_usage(app: &AppHandle, query: &UsageQuery) -> Result<Value, String> {
+    let mut args = vec!["usage".to_string()];
+    args.extend(query.cli_args());
+    run_cli_json(app, &args, "查询本地用量失败").await
+}
+
+/// Price-table status via the vendored CLI's `prices` command. `force`
+/// triggers a real refresh attempt whose outcome (ok or error) is reported
+/// instead of swallowed, so the settings view can show why a manual refresh
+/// failed while the fallback table keeps serving.
+pub async fn fetch_pricing_status(app: &AppHandle, force: bool) -> Result<Value, String> {
+    let mut args = vec!["prices".to_string()];
+    if force {
+        args.push("--refresh".to_string());
+    }
+    run_cli_json(app, &args, "查询价格表失败").await
+}
+
+async fn run_cli_json(app: &AppHandle, args: &[String], context: &str) -> Result<Value, String> {
     let cli = crate::services::sync_engine::cli_entry(app)
         .ok_or_else(|| "未找到内置 CLI 资源".to_string())?;
     let rt = detect_runtime_for_usage(app).ok_or_else(|| {
@@ -56,8 +74,7 @@ pub async fn fetch_usage(app: &AppHandle, query: &UsageQuery) -> Result<Value, S
     let mut cmd = tokio::process::Command::new(&rt.path);
     cmd.current_dir(&cli_dir)
         .arg(&cli_file)
-        .arg("usage")
-        .args(query.cli_args())
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -85,7 +102,7 @@ pub async fn fetch_usage(app: &AppHandle, query: &UsageQuery) -> Result<Value, S
     cmd.env("NODE_USE_ENV_PROXY", "1");
     process_utils::hide_tokio_command_window(&mut cmd);
 
-    let mut child = cmd.spawn().map_err(|e| format!("查询本地用量失败: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("{context}: {e}"))?;
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
@@ -107,23 +124,23 @@ pub async fn fetch_usage(app: &AppHandle, query: &UsageQuery) -> Result<Value, S
             let (io, status) = tokio::join!(io_task, child.wait());
             (io, status)
         } => res,
-        _ = tokio::time::sleep(USAGE_TIMEOUT) => {
+        _ = tokio::time::sleep(CLI_TIMEOUT) => {
             process_utils::kill_child_tree(&mut child);
-            return Err("查询本地用量超时".into());
+            return Err(format!("{context}超时"));
         }
     };
 
     let ((stdout, stderr), status) = combined;
-    let status = status.map_err(|e| format!("查询本地用量失败: {e}"))?;
+    let status = status.map_err(|e| format!("{context}: {e}"))?;
     if !status.success() {
         let msg = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
         let first = msg.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
-        return Err(format!("查询本地用量失败: {first}"));
+        return Err(format!("{context}: {first}"));
     }
 
     // The CLI may print dim warnings on stderr; stdout must be pure JSON.
     serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("本地用量数据异常: {e}"))
+        .map_err(|e| format!("{context}: 数据异常 ({e})"))
 }
 
 fn detect_runtime_for_usage(app: &AppHandle) -> Option<Runtime> {

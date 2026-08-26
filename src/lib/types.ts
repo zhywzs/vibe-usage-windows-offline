@@ -228,3 +228,25 @@ export type UsageQuery =
   | { kind: "days"; days: number }
   | { kind: "from"; fromIso: string }
   | { kind: "custom"; fromDate: string; toDate: string };
+
+// ---------------------------------------------------------------------------
+// Price-table status (from the offline CLI `prices` command)
+
+export interface PricingRefreshState {
+  attempted: boolean;
+  ok: boolean | null;
+  error: string | null;
+}
+
+export interface PricingStatus {
+  source: "snapshot" | "cache" | "refreshed";
+  fetchedAt: string;
+  modelCount: number;
+  offline: boolean;
+  refresh: PricingRefreshState;
+  coverage: {
+    usedModelCount: number;
+    pricedModels: string[];
+    unpricedModels: string[];
+  };
+}

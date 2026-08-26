@@ -84,6 +84,16 @@ async function fetchTable(url) {
   return models;
 }
 
+// Force one refresh attempt. Throws on failure (the caller decides whether
+// that is silent or user-visible); writes the cache on success.
+export async function tryRefreshPriceTable() {
+  const url = process.env.VIBE_USAGE_PRICES_URL?.trim() || DEFAULT_URL;
+  const models = await fetchTable(url);
+  const fetchedAt = new Date().toISOString();
+  writeCache(models, fetchedAt);
+  return { fetchedAt, models, source: 'refreshed' };
+}
+
 /**
  * Resolve the price table, refreshing the cache when stale (best-effort).
  * Never throws: network failure degrades to cache, then to the snapshot.
@@ -99,15 +109,55 @@ export async function getPriceTable({ force = false } = {}) {
     return cache ?? getSnapshotTable();
   }
 
-  const url = process.env.VIBE_USAGE_PRICES_URL?.trim() || DEFAULT_URL;
   try {
-    const models = await fetchTable(url);
-    const fetchedAt = new Date().toISOString();
-    writeCache(models, fetchedAt);
-    return { fetchedAt, models, source: 'refreshed' };
+    return await tryRefreshPriceTable();
   } catch {
     return cache ?? getSnapshotTable();
   }
+}
+
+// Resolve the price table plus a machine-readable status describing which
+// layer is active and — with `refresh` — why a forced attempt did or did not
+// succeed. `getPriceTable` stays silent by design; this is the reporting
+// surface for `vibe-usage prices` and the desktop settings view.
+export async function loadPricing({ refresh = false } = {}) {
+  const offline = process.env.VIBE_USAGE_OFFLINE === '1';
+  const refreshState = { attempted: false, ok: null, error: null };
+
+  let table;
+  if (refresh) {
+    refreshState.attempted = true;
+    if (offline) {
+      refreshState.ok = false;
+      refreshState.error = 'offline mode (VIBE_USAGE_OFFLINE=1)';
+      table = readCache() ?? getSnapshotTable();
+    } else {
+      try {
+        table = await tryRefreshPriceTable();
+        refreshState.ok = true;
+      } catch (err) {
+        refreshState.ok = false;
+        refreshState.error = err?.message || String(err);
+        table = readCache() ?? getSnapshotTable();
+      }
+    }
+  } else {
+    table = await getPriceTable();
+  }
+
+  const status = {
+    source: table.source,
+    fetchedAt: table.fetchedAt,
+    modelCount: Object.keys(table.models).length,
+    offline,
+    refresh: refreshState,
+  };
+  return { status, table };
+}
+
+export async function getPricingStatus(opts = {}) {
+  const { status } = await loadPricing(opts);
+  return status;
 }
 
 // ── Model-name matching ───────────────────────────────────────────────

@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { api, onSyncState } from "./lib/api";
-import { AppSettings, AppStatus, SyncState } from "./lib/types";
+import { AppSettings, AppStatus, PricingStatus, SyncState } from "./lib/types";
 import { formatRelativeTime } from "./lib/formatters";
 
 export function SettingsApp() {
@@ -14,22 +14,30 @@ export function SettingsApp() {
   const [syncState, setSyncState] = useState<SyncState>({ status: "idle" });
   const [autoStart, setAutoStart] = useState(false);
 
+  const [pricing, setPricing] = useState<PricingStatus | null>(null);
+  const [pricingBusy, setPricingBusy] = useState(false);
+  const [pricingMessage, setPricingMessage] = useState<string | null>(null);
+  const [pricingMessageIsError, setPricingMessageIsError] = useState(false);
+
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    const [nextStatus, nextSettings, nextSyncState, nextAutoStart] = await Promise.allSettled([
-      api.getAppStatus(),
-      api.getSettings(),
-      api.getSyncState(),
-      api.getLaunchAtLogin(),
-    ]);
+    const [nextStatus, nextSettings, nextSyncState, nextAutoStart, nextPricing] =
+      await Promise.allSettled([
+        api.getAppStatus(),
+        api.getSettings(),
+        api.getSyncState(),
+        api.getLaunchAtLogin(),
+        api.getPricingStatus(false),
+      ]);
 
     if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
     if (nextSettings.status === "fulfilled") setSettings(nextSettings.value);
     if (nextSyncState.status === "fulfilled") setSyncState(nextSyncState.value);
     if (nextAutoStart.status === "fulfilled") setAutoStart(nextAutoStart.value);
+    if (nextPricing.status === "fulfilled") setPricing(nextPricing.value);
   }, []);
 
   useEffect(() => {
@@ -95,6 +103,29 @@ export function SettingsApp() {
     }
   };
 
+  const refreshPricing = async () => {
+    setPricingBusy(true);
+    setPricingMessage(null);
+    try {
+      const next = await api.getPricingStatus(true);
+      setPricing(next);
+      if (next.refresh.ok) {
+        setPricingMessageIsError(false);
+        setPricingMessage(`已更新 · ${next.modelCount} 个模型`);
+      } else {
+        setPricingMessageIsError(true);
+        setPricingMessage(
+          `刷新失败: ${next.refresh.error ?? "未知错误"}（当前使用${pricingSourceLabel(next.source)}）`,
+        );
+      }
+    } catch (err) {
+      setPricingMessageIsError(true);
+      setPricingMessage(`刷新失败: ${String(err)}`);
+    } finally {
+      setPricingBusy(false);
+    }
+  };
+
   return (
     <div
       className="h-screen overflow-hidden font-sans text-[13px]"
@@ -143,6 +174,68 @@ export function SettingsApp() {
               {status?.storePath ?? ""}
             </span>
           </Row>
+        </Section>
+
+        {/* 价格表 */}
+        <Section title="价格表" footer="费用由本地价格表估算；无价格的模型仅统计 tokens，不计入费用">
+          <Row label="来源">
+            <span
+              className="text-xs"
+              style={{ color: pricing?.source === "refreshed" ? "#34C759" : "#B0B0B0" }}
+            >
+              {pricing ? pricingSourceLabel(pricing.source) : "…"}
+            </span>
+          </Row>
+          <Row label="更新时间">
+            <span className="text-xs" style={{ color: "#9E9E9E" }}>
+              {pricing
+                ? `${formatRelativeTime(new Date(pricing.fetchedAt))} · ${pricing.modelCount} 个模型`
+                : ""}
+            </span>
+          </Row>
+          {pricing && pricing.coverage.usedModelCount > 0 && (
+            <Row label="模型覆盖">
+              <span
+                className="max-w-[220px] text-right text-xs"
+                style={{ color: "#9E9E9E" }}
+                title={
+                  pricing.coverage.unpricedModels.length > 0
+                    ? `无价格: ${pricing.coverage.unpricedModels.join(", ")}`
+                    : "已使用的模型均有价格"
+                }
+              >
+                {pricing.coverage.pricedModels.length}/{pricing.coverage.usedModelCount} 已覆盖
+              </span>
+            </Row>
+          )}
+          <Row label="网络刷新">
+            <div className="flex items-center gap-2">
+              {pricingMessage && (
+                <span
+                  className="max-w-[230px] text-xs"
+                  style={{ color: pricingMessageIsError ? "#EF4444" : "#9E9E9E" }}
+                >
+                  {pricingMessage}
+                </span>
+              )}
+              <SmallButton
+                disabled={pricingBusy || !!pricing?.offline}
+                onClick={() => void refreshPricing()}
+              >
+                {pricingBusy ? "刷新中…" : "立即刷新"}
+              </SmallButton>
+            </div>
+          </Row>
+          {pricing?.offline && (
+            <div className="px-3 py-2 text-[11px]" style={{ color: "#737373" }}>
+              离线模式已启用（VIBE_USAGE_OFFLINE=1），网络刷新被禁用
+            </div>
+          )}
+          {pricing && pricing.coverage.unpricedModels.length > 0 && (
+            <div className="break-words px-3 py-2 text-[11px]" style={{ color: "#737373" }}>
+              无价格数据（不计入费用）: {unpricedSummary(pricing)}
+            </div>
+          )}
         </Section>
 
         {/* 订阅配额 */}
@@ -317,4 +410,22 @@ function SmallButton({
       {children}
     </button>
   );
+}
+
+function pricingSourceLabel(source: PricingStatus["source"]): string {
+  switch (source) {
+    case "refreshed":
+      return "最新价格表";
+    case "cache":
+      return "本地缓存";
+    case "snapshot":
+      return "内置快照";
+  }
+}
+
+function unpricedSummary(pricing: PricingStatus): string {
+  const models = pricing.coverage.unpricedModels;
+  const shown = models.slice(0, 6);
+  const extra = models.length - shown.length;
+  return shown.join(", ") + (extra > 0 ? ` 等 ${extra} 个` : "");
 }

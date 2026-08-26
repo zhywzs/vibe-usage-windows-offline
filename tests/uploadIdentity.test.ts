@@ -30,8 +30,21 @@ test("vendoring never resolves the CLI from the npm registry", () => {
 
 test("usage queries stay local — fetch spawns the CLI, not an HTTP endpoint", () => {
   const source = readFileSync("src-tauri/src/services/usage_reader.rs", "utf-8");
-  expect(source).toContain('.arg("usage")');
+  expect(source).toContain('vec!["usage".to_string()]');
   expect(source).not.toContain("/api/usage");
   expect(existsSync("src-tauri/src/services/api_client.rs")).toBe(false);
   expect(existsSync("src-tauri/src/services/device_link.rs")).toBe(false);
+});
+
+test("pricing status is served by the vendored CLI with refresh reporting", () => {
+  const reader = readFileSync("src-tauri/src/services/usage_reader.rs", "utf-8");
+  expect(reader).toContain('vec!["prices".to_string()]');
+  expect(reader).toContain('"--refresh"');
+  const commands = readFileSync("src-tauri/src/commands.rs", "utf-8");
+  expect(commands).toContain("get_pricing_status");
+  // The vendored CLI must ship the prices command the Rust bridge spawns.
+  expect(existsSync("src-tauri/resources/cli/src/prices.js")).toBe(true);
+  const settings = readFileSync("src/SettingsApp.tsx", "utf-8");
+  expect(settings).toContain("getPricingStatus");
+  expect(settings).toContain("模型覆盖");
 });

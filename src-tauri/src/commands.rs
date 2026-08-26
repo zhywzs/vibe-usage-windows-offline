@@ -43,6 +43,16 @@ pub async fn fetch_usage(app: AppHandle, query: UsageQuery) -> Result<Value, Str
     usage_reader::fetch_usage(&app, &query).await
 }
 
+// -- Pricing ----------------------------------------------------------------------
+
+/// Price-table status from the vendored CLI (`prices` command): active layer
+/// (snapshot/cache/refreshed), freshness, model coverage, and — with
+/// `force` — the outcome of a manual refresh attempt.
+#[tauri::command]
+pub async fn get_pricing_status(app: AppHandle, force: bool) -> Result<Value, String> {
+    usage_reader::fetch_pricing_status(&app, force).await
+}
+
 // -- Sync ---------------------------------------------------------------------
 
 #[tauri::command]
