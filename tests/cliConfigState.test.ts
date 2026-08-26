@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const originalConfigDir = process.env.VIBE_USAGE_CONFIG_DIR;
+const originalStoreDir = process.env.VIBE_USAGE_STORE_DIR;
 const originalDev = process.env.VIBE_USAGE_DEV;
 const tempDirs: string[] = [];
 
@@ -19,24 +20,22 @@ function makeTempDir() {
   return dir;
 }
 
-async function importWithConfigDir<T>(path: string, dir: string): Promise<T> {
+async function importWithDirs<T>(path: string, dir: string): Promise<T> {
   process.env.VIBE_USAGE_CONFIG_DIR = dir;
+  process.env.VIBE_USAGE_STORE_DIR = dir;
   delete process.env.VIBE_USAGE_DEV;
   vi.resetModules();
   return import(path) as Promise<T>;
 }
 
 afterEach(() => {
-  if (originalConfigDir === undefined) {
-    delete process.env.VIBE_USAGE_CONFIG_DIR;
-  } else {
-    process.env.VIBE_USAGE_CONFIG_DIR = originalConfigDir;
-  }
-
-  if (originalDev === undefined) {
-    delete process.env.VIBE_USAGE_DEV;
-  } else {
-    process.env.VIBE_USAGE_DEV = originalDev;
+  for (const [key, value] of [
+    ["VIBE_USAGE_CONFIG_DIR", originalConfigDir],
+    ["VIBE_USAGE_STORE_DIR", originalStoreDir],
+    ["VIBE_USAGE_DEV", originalDev],
+  ] as const) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
   }
 
   vi.resetModules();
@@ -49,32 +48,35 @@ test("saveConfig repairs a directory occupying config.json", async () => {
   const dir = makeTempDir();
   mkdirSync(join(dir, "config.json"));
 
-  const config = await importWithConfigDir<typeof import("../src-tauri/resources/cli/src/config.js")>(
+  const config = await importWithDirs<typeof import("../src-tauri/resources/cli/src/config.js")>(
     "../src-tauri/resources/cli/src/config.js",
     dir,
   );
-  config.saveConfig({ apiKey: "vbu_test", apiUrl: "https://vibecafe.ai" });
+  config.saveConfig({ hostname: "offline-pc" });
 
   const parsed = JSON.parse(readFileSync(join(dir, "config.json"), "utf-8"));
-  expect(parsed.apiKey).toBe("vbu_test");
+  expect(parsed.hostname).toBe("offline-pc");
   expect(readdirSync(dir).some((name) => name.startsWith("config.json.directory-backup-"))).toBe(
     true,
   );
 });
 
-test("saveState repairs a directory occupying state.json", async () => {
+test("saveStore repairs a directory occupying usage.json", async () => {
   const dir = makeTempDir();
-  mkdirSync(join(dir, "state.json"));
+  mkdirSync(join(dir, "usage.json"));
 
-  const state = await importWithConfigDir<typeof import("../src-tauri/resources/cli/src/state.js")>(
-    "../src-tauri/resources/cli/src/state.js",
+  const store = await importWithDirs<typeof import("../src-tauri/resources/cli/src/store.js")>(
+    "../src-tauri/resources/cli/src/store.js",
     dir,
   );
-  state.saveState({ buckets: { a: "b" }, sessions: {} });
+  store.saveStore({
+    buckets: { k: { hash: "h", data: { source: "codex" } } },
+    sessions: {},
+  });
 
-  const parsed = JSON.parse(readFileSync(join(dir, "state.json"), "utf-8"));
-  expect(parsed.buckets.a).toBe("b");
-  expect(readdirSync(dir).some((name) => name.startsWith("state.json.directory-backup-"))).toBe(
+  const parsed = JSON.parse(readFileSync(join(dir, "usage.json"), "utf-8"));
+  expect(parsed.buckets.k.data.source).toBe("codex");
+  expect(readdirSync(dir).some((name) => name.startsWith("usage.json.directory-backup-"))).toBe(
     true,
   );
 });

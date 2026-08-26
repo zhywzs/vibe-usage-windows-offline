@@ -1,4 +1,5 @@
 import { loadConfig, saveConfig, getConfigPath } from './config.js';
+import { getStorePath } from './store.js';
 import { detectInstalledTools, TOOLS } from './tools.js';
 import { existsSync } from 'node:fs';
 import { validateExtraCodexHome } from './codex-roots.js';
@@ -14,13 +15,13 @@ async function showStatus() {
   const config = loadConfig();
   console.log('\nvibe-usage status\n');
 
-  if (!config?.apiKey) {
+  if (!config?.hostname) {
     console.log('  Config: not configured');
     console.log(`  Run \`npx @vibe-cafe/vibe-usage init\` to set up.\n`);
   } else {
     console.log(`  Config: ${getConfigPath()}`);
-    console.log(`  API key: ${config.apiKey.slice(0, 8)}...`);
-    console.log(`  API URL: ${config.apiUrl || 'https://vibecafe.ai'}`);
+    console.log(`  Hostname: ${config.hostname}`);
+    console.log(`  Data store: ${getStorePath()}`);
     if (config.codexExtraHome) {
       console.log(`  Extra Codex Home: ${config.codexExtraHome}`);
     }
@@ -48,7 +49,7 @@ async function showStatus() {
   console.log();
 }
 
-const VALID_CONFIG_KEYS = ['apiKey', 'apiUrl', 'hostname', 'codexExtraHome'];
+const VALID_CONFIG_KEYS = ['hostname', 'codexExtraHome'];
 
 function handleConfig(args) {
   const sub = args[0];
@@ -123,17 +124,9 @@ function extractOption(args, name) {
 }
 
 export async function run(rawArgs) {
-  // --key and --manual-key both mean "skip device flow, take this vbu_ key".
-  // --manual-key is the documented name; --key is kept as a legacy alias so
-  // existing scripts/docs don't break when device flow becomes the default.
   let stripped;
-  let apiKey;
-  ({ args: stripped, value: apiKey } = extractOption(rawArgs, 'manual-key'));
-  if (apiKey === undefined) {
-    ({ args: stripped, value: apiKey } = extractOption(stripped, 'key'));
-  }
   let codexExtraHome;
-  ({ args: stripped, value: codexExtraHome } = extractOption(stripped, 'extra-codex-home'));
+  ({ args: stripped, value: codexExtraHome } = extractOption(rawArgs, 'extra-codex-home'));
   if (codexExtraHome !== undefined) {
     const validation = validateExtraCodexHome(codexExtraHome);
     if (!validation.ok) {
@@ -149,7 +142,7 @@ export async function run(rawArgs) {
   switch (command) {
     case 'init': {
       const { runInit } = await import('./init.js');
-      await runInit({ apiKey, codexExtraHome });
+      await runInit({ codexExtraHome });
       break;
     }
     case 'sync': {
@@ -161,6 +154,11 @@ export async function run(rawArgs) {
     case 'summary': {
       const { runSummary } = await import('./summary.js');
       await runSummary(args.slice(1));
+      break;
+    }
+    case 'usage': {
+      const { runUsage } = await import('./usage.js');
+      await runUsage(args.slice(1));
       break;
     }
     case 'reset': {
@@ -208,24 +206,24 @@ export async function run(rawArgs) {
     case '--help':
     case '-h': {
       console.log(`
-  vibe-usage - Vibe Usage Tracker by VibeCafé
+  vibe-usage - Offline Vibe Usage Tracker by VibeCafé
 
   Usage:
-    npx @vibe-cafe/vibe-usage              Init (first run, browser login) or sync
-    npx @vibe-cafe/vibe-usage init         Set up via browser login (default)
-    npx @vibe-cafe/vibe-usage init --manual-key <vbu_...>   Skip browser, use a pre-issued key (CI/headless)
-    npx @vibe-cafe/vibe-usage sync         Manually sync usage data
+    npx @vibe-cafe/vibe-usage              Init (first run) or sync (subsequent runs)
+    npx @vibe-cafe/vibe-usage init         Set up (detect tools, initial local import)
+    npx @vibe-cafe/vibe-usage sync         Import usage data from local logs
     npx @vibe-cafe/vibe-usage sync --extra-codex-home <path>  Use another Codex Home for this run
     npx @vibe-cafe/vibe-usage summary       Print last 7 days as markdown (cost/tokens/model/project)
     npx @vibe-cafe/vibe-usage summary --days N   Same, but over the last N days (1-90)
+    npx @vibe-cafe/vibe-usage usage [--days N | --from <ISO> | --from-date <D> --to-date <D>]  Local usage as JSON
     npx @vibe-cafe/vibe-usage daemon       Continuous sync (every 30m, foreground)
     npx @vibe-cafe/vibe-usage daemon install    Install background service (systemd/launchd)
     npx @vibe-cafe/vibe-usage daemon uninstall  Remove background service
     npx @vibe-cafe/vibe-usage daemon status     Show background service status
     npx @vibe-cafe/vibe-usage daemon stop       Stop background service
     npx @vibe-cafe/vibe-usage daemon restart    Restart background service
-    npx @vibe-cafe/vibe-usage reset        Delete all data and re-upload
-    npx @vibe-cafe/vibe-usage reset --local  Delete data for this host only and re-upload (--host is a legacy alias)
+    npx @vibe-cafe/vibe-usage reset        Delete local usage data and re-import from logs
+    npx @vibe-cafe/vibe-usage reset --local  Same as reset (--host remains a legacy alias)
     npx @vibe-cafe/vibe-usage skill         Install skill for AI coding tools
     npx @vibe-cafe/vibe-usage skill --remove  Remove installed skills
     npx @vibe-cafe/vibe-usage status       Show config and detected tools
@@ -234,17 +232,19 @@ export async function run(rawArgs) {
     npx @vibe-cafe/vibe-usage config set <key> <value>  Set a config value
     npx @vibe-cafe/vibe-usage config set codexExtraHome <path>  Persist another Codex Home
     npx @vibe-cafe/vibe-usage help         Show this help
+
+  Fully offline: usage data stays in ~/.vibe-usage/usage.json; nothing is uploaded.
 `);
       break;
     }
     case undefined: {
-      // Bare invocation (no command): first run OR a one-shot --key setup →
-      // init; already configured → sync.
+      // Bare invocation (no command): first run → init; already configured →
+      // sync.
       const config = loadConfig();
-      if (!config?.apiKey || apiKey) {
-        // First run OR user passed --key for a one-shot setup — init.js prints the big header
+      if (!config?.hostname) {
+        // First run — init.js prints the big header
         const { runInit } = await import('./init.js');
-        await runInit({ apiKey, codexExtraHome });
+        await runInit({ codexExtraHome });
       } else {
         // Already configured: small header + sync
         printSmallHeader();
@@ -254,9 +254,10 @@ export async function run(rawArgs) {
       break;
     }
     default: {
-      // Compatibility is explicit above: --key, --daemon, reset --host, and
-      // the no-command init/sync behavior remain supported. Unknown words were
-      // never public commands; failing them avoids typo-triggered side effects.
+      // Compatibility is explicit above: --daemon, reset --host, and the
+      // no-command init/sync behavior remain supported. Unknown words were
+      // never public commands; failing them avoids typo-triggered side
+      // effects.
       console.error(`Unknown command: ${command}`);
       console.error('Run `vibe-usage help` to see available commands.');
       process.exit(1);

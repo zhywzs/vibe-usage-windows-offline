@@ -1,7 +1,8 @@
 import { createReadStream, readdirSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join, basename, sep } from 'node:path';
-import { aggregateToBuckets, extractSessions } from './index.js';
+import { aggregateToBuckets, extractSessions } from './aggregate.js';
+import { projectFromCwd, toCount } from './fs-utils.js';
 import { getClaudeRoots } from '../claude-roots.js';
 
 const MAX_WARNINGS = 20;
@@ -47,19 +48,6 @@ function projectFromRelative(relative) {
   if (!firstSegment) return 'unknown';
   const parts = firstSegment.split('-').filter(Boolean);
   return parts.at(-1) || 'unknown';
-}
-
-/** Works for Unix and Windows cwd values regardless of the current OS. */
-function projectFromCwd(cwd, fallback) {
-  if (typeof cwd !== 'string') return fallback;
-  const trimmed = cwd.trim().replace(/[\\/]+$/, '');
-  if (!trimmed) return fallback;
-  return trimmed.split(/[\\/]/).filter(Boolean).at(-1) || fallback;
-}
-
-function toCount(value) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 function cacheCreationTokens(usage) {
@@ -207,7 +195,7 @@ async function scanProjectCandidate(candidate) {
     if (usageScore === 0) return;
 
     entries.push({
-      uuid: typeof obj.uuid === 'string' && obj.uuid ? obj.uuid : null,
+      dedupeKey: usageDedupeKey(obj),
       usageScore,
       source: 'claude-code',
       model,
@@ -251,22 +239,36 @@ async function scanBestCandidate(candidates, scanner, ctx) {
   return null;
 }
 
+// One API call is written as several assistant lines - one per content block -
+// that share `message.id`/`requestId` and repeat the same `usage` object, so a
+// per-line key counts the same call once per block. Streaming also emits an
+// early partial line (lower `output_tokens`) before the final one under that
+// same id. Keying on the call identity collapses both, and the existing
+// highest-usageScore wins rule then keeps the final, complete payload.
+// Records without either id (older logs) fall back to the line uuid.
+function usageDedupeKey(obj) {
+  const messageId = typeof obj.message?.id === 'string' ? obj.message.id.trim() : '';
+  const requestId = typeof obj.requestId === 'string' ? obj.requestId.trim() : '';
+  if (messageId || requestId) return `call:${messageId}\u0000${requestId}`;
+  return typeof obj.uuid === 'string' && obj.uuid ? obj.uuid : null;
+}
+
 function mergeUsageEntry(ctx, entry) {
-  if (!entry.uuid) {
+  if (!entry.dedupeKey) {
     ctx.anonymousEntries.push(entry);
     return;
   }
-  const current = ctx.entriesByUuid.get(entry.uuid);
-  // Claude sometimes copies the same UUID into another session with zeroed
+  const current = ctx.entriesByKey.get(entry.dedupeKey);
+  // Claude sometimes copies the same record into another session with zeroed
   // usage. Keep the most complete payload, independent of directory order.
   if (!current || entry.usageScore > current.usageScore) {
-    ctx.entriesByUuid.set(entry.uuid, entry);
+    ctx.entriesByKey.set(entry.dedupeKey, entry);
   }
 }
 
 export async function parse() {
   const ctx = {
-    entriesByUuid: new Map(),
+    entriesByKey: new Map(),
     anonymousEntries: [],
     sessionEvents: [],
     warnings: [],
@@ -295,8 +297,8 @@ export async function parse() {
 
   const entries = [
     ...ctx.anonymousEntries,
-    ...ctx.entriesByUuid.values(),
-  ].map(({ uuid: _uuid, usageScore: _usageScore, ...entry }) => entry);
+    ...ctx.entriesByKey.values(),
+  ].map(({ dedupeKey: _dedupeKey, usageScore: _usageScore, ...entry }) => entry);
 
   return {
     buckets: aggregateToBuckets(entries),

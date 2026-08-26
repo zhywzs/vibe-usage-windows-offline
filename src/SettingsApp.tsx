@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
-import { api, onDeviceLink, onSyncState } from "./lib/api";
+import { api, onSyncState } from "./lib/api";
 import { AppSettings, AppStatus, SyncState } from "./lib/types";
 import { formatRelativeTime } from "./lib/formatters";
 
@@ -14,9 +14,6 @@ export function SettingsApp() {
   const [syncState, setSyncState] = useState<SyncState>({ status: "idle" });
   const [autoStart, setAutoStart] = useState(false);
 
-  const [isRelinking, setIsRelinking] = useState(false);
-  const [relinkUserCode, setRelinkUserCode] = useState<string | null>(null);
-  const [relinkError, setRelinkError] = useState<string | null>(null);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
@@ -41,50 +38,11 @@ export function SettingsApp() {
     void reload();
     const subs = [
       onSyncState(setSyncState),
-      onDeviceLink(async (e) => {
-        setIsRelinking(false);
-        setRelinkUserCode(null);
-        switch (e.status) {
-          case "success":
-            setRelinkError(null);
-            await reload();
-            break;
-          case "denied":
-            setRelinkError("你拒绝了链接请求。");
-            break;
-          case "expired":
-            setRelinkError("验证码已过期，请重新登录。");
-            break;
-          case "error":
-            setRelinkError(`服务端返回未知错误：${e.message}`);
-            break;
-        }
-      }),
     ];
     return () => {
       for (const p of subs) void p.then((un) => un());
     };
   }, [reload]);
-
-  const relink = async () => {
-    setRelinkError(null);
-    setRelinkUserCode(null);
-    setIsRelinking(true);
-    try {
-      const { userCode } = await api.startDeviceLink();
-      setRelinkUserCode(userCode);
-    } catch (err) {
-      setRelinkError(`无法连接服务端：${String(err)}`);
-      setIsRelinking(false);
-    }
-  };
-
-  const cancelRelink = () => {
-    void api.cancelDeviceLink();
-    setIsRelinking(false);
-    setRelinkUserCode(null);
-    setRelinkError(null);
-  };
 
   const patchSettings = (patch: Partial<AppSettings>) => {
     if (!settings) return;
@@ -145,26 +103,10 @@ export function SettingsApp() {
       <div className="no-scrollbar mx-auto flex h-full max-w-[430px] flex-col gap-4 overflow-y-auto px-4 py-4">
         {/* 同步 */}
         <Section title="同步">
-          <Row label="API Key">
-            <div className="flex flex-col items-end gap-1.5">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs" style={{ color: "#808080" }}>
-                  {status?.apiKeyDisplay ?? "未配置"}
-                </span>
-                <SmallButton disabled={isRelinking} onClick={() => void relink()}>
-                  {isRelinking ? "等待确认…" : "重新链接"}
-                </SmallButton>
-                {isRelinking && <SmallButton onClick={cancelRelink}>取消</SmallButton>}
-              </div>
-              {relinkUserCode && (
-                <span className="font-mono text-xs" style={{ color: "#9E9E9E" }}>
-                  验证码: {relinkUserCode}
-                </span>
-              )}
-              {relinkError && (
-                <span className="max-w-[280px] text-xs text-red-400">{relinkError}</span>
-              )}
-            </div>
+          <Row label="模式">
+            <span className="text-xs" style={{ color: "#808080" }}>
+              完全本地 · 数据不上传
+            </span>
           </Row>
           <Row label="状态">
             <span className="flex items-center gap-1 text-xs" style={{ color: "#B0B0B0" }}>
@@ -192,6 +134,15 @@ export function SettingsApp() {
               </span>
             </Row>
           )}
+          <Row label="数据位置">
+            <span
+              className="max-w-[220px] truncate font-mono text-xs"
+              style={{ color: "#9E9E9E" }}
+              title={status?.storePath}
+            >
+              {status?.storePath ?? ""}
+            </span>
+          </Row>
         </Section>
 
         {/* 订阅配额 */}
@@ -262,13 +213,13 @@ export function SettingsApp() {
           {!showResetConfirm ? (
             <Row label="">
               <button className="text-[13px] text-red-400" onClick={() => setShowResetConfirm(true)}>
-                重置配置
+                重置本地数据
               </button>
             </Row>
           ) : (
             <div className="flex flex-col gap-2 px-3 py-2.5">
               <span className="text-xs" style={{ color: "#B0B0B0" }}>
-                确定要重置配置吗？这将清除 API Key 并停止自动同步。
+                确定要重置本地数据吗？将删除已统计的用量并立即从本地日志重新统计（不会删除工具日志）。
               </span>
               <div className="flex justify-end gap-2">
                 <SmallButton onClick={() => setShowResetConfirm(false)}>取消</SmallButton>

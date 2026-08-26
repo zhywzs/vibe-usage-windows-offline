@@ -17,13 +17,6 @@ export const api = {
 
   fetchUsage: (query: UsageQuery) => invoke<UsageResponse>("fetch_usage", { query }),
 
-  // Device link -------------------------------------------------------------
-  /** Starts the flow; resolves with the user code once the browser is opened.
-   *  Completion arrives via the `device-link` event. */
-  startDeviceLink: () => invoke<{ userCode: string }>("start_device_link"),
-  cancelDeviceLink: () => invoke<void>("cancel_device_link"),
-  setManualKey: (apiKey: string) => invoke<void>("set_manual_key", { apiKey }),
-
   // Sync ---------------------------------------------------------------------
   triggerSync: () => invoke<void>("trigger_sync"),
   getSyncState: () => invoke<SyncState>("get_sync_state"),
@@ -52,18 +45,8 @@ export const api = {
 
 // Events --------------------------------------------------------------------
 
-export type DeviceLinkEvent =
-  | { status: "success" }
-  | { status: "denied" }
-  | { status: "expired" }
-  | { status: "error"; message: string };
-
 export function onSyncState(handler: (s: SyncState) => void): Promise<UnlistenFn> {
   return listen<SyncState>("sync-state", (e) => handler(e.payload));
-}
-
-export function onDeviceLink(handler: (e: DeviceLinkEvent) => void): Promise<UnlistenFn> {
-  return listen<DeviceLinkEvent>("device-link", (e) => handler(e.payload));
 }
 
 export function onUpdateAvailable(handler: (u: UpdateInfo) => void): Promise<UnlistenFn> {

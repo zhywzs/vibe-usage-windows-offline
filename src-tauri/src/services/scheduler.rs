@@ -28,14 +28,6 @@ pub fn start(app: AppHandle) {
     *ctx.scheduler_task.lock().unwrap() = Some(handle);
 }
 
-pub fn stop(app: &AppHandle) {
-    let ctx = app.state::<AppCtx>();
-    let old = ctx.scheduler_task.lock().unwrap().take();
-    if let Some(old) = old {
-        old.abort();
-    }
-}
-
 /// Background update poll (startup + every 24h).
 pub fn start_update_checks(app: AppHandle) {
     tauri::async_runtime::spawn(async move {

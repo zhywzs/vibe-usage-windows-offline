@@ -33,12 +33,12 @@ function tildePath(absPath) {
 
 const SKILL_CONTENT = `---
 name: vibe-usage
-description: 查询和同步 AI 编程工具的 token 用量（VibeCafé 旗下 Vibe Usage 数据）。
+description: 统计 AI 编程工具的 token 用量（本地离线统计，数据不上传）。
 ---
 
 # Vibe Usage
 
-Track and answer questions about the user's AI coding token spend via [Vibe Usage](https://vibecafe.ai/usage) (VibeCafé).
+Track and answer questions about the user's AI coding token spend with Vibe Usage (fully offline, data stays on this machine).
 
 ## 查询用量（默认行为）
 
@@ -58,16 +58,17 @@ Track and answer questions about the user's AI coding token spend via [Vibe Usag
 
 | 用户说... | 运行 |
 |---|---|
-| 同步数据 / 上传 usage / 数据没更新 | \`npx @vibe-cafe/vibe-usage sync\` |
-| 看 daemon 状态 / 后台同步还在跑吗 | \`npx @vibe-cafe/vibe-usage daemon status\` |
-| 启动后台同步 | \`npx @vibe-cafe/vibe-usage daemon install\` |
-| 重置数据 / 重新上传 | \`npx @vibe-cafe/vibe-usage reset\` |
+| 同步数据 / 统计 usage / 数据没更新 | \`npx @vibe-cafe/vibe-usage sync\` |
+| 看 daemon 状态 / 后台统计还在跑吗 | \`npx @vibe-cafe/vibe-usage daemon status\` |
+| 启动后台统计 | \`npx @vibe-cafe/vibe-usage daemon install\` |
+| 重置数据 / 重新统计 | \`npx @vibe-cafe/vibe-usage reset\` |
 
 ## 注意
 
-- \`summary\` 读 \`~/.vibe-usage/config.json\` 里已有的 API key，不需要用户额外输入
+- 完全离线：用量数据保存在 \`~/.vibe-usage/usage.json\`，不上传任何内容
+- \`summary\` 直接读本地数据，无需配置、无需联网（费用为本地价格表估算）
 - summary 输出已是 markdown，**原样展示，不要复述**
-- 用户没装过 vibe-usage？提示运行 \`npx @vibe-cafe/vibe-usage\` 先用浏览器登录链接账号
+- 用户没初始化过？提示运行 \`npx @vibe-cafe/vibe-usage init\`
 - 支持的工具：Claude Code, Codex, Grok 等
 `;
 

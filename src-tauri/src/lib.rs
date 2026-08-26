@@ -44,10 +44,9 @@ pub fn run() {
                     });
                 }
 
-                // Configured → immediate sync + 30-minute schedule.
-                if ctx.config.is_configured() {
-                    services::scheduler::start(handle.clone());
-                }
+                // Offline app: no login gate — always keep the 30-minute
+                // local import loop running.
+                services::scheduler::start(handle.clone());
             }
             services::scheduler::start_update_checks(handle);
             Ok(())
@@ -69,9 +68,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_status,
             commands::fetch_usage,
-            commands::start_device_link,
-            commands::cancel_device_link,
-            commands::set_manual_key,
             commands::trigger_sync,
             commands::get_sync_state,
             commands::get_rate_limits,

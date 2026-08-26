@@ -1,7 +1,7 @@
 //! Tauri commands — the app's entire invoke surface (see src/lib/api.ts).
 
-use crate::services::api_client::{self, UsageQuery};
-use crate::services::{auto_launch, device_link, rate_limits, scheduler, sync_engine, updater};
+use crate::services::usage_reader::{self, UsageQuery};
+use crate::services::{auto_launch, rate_limits, sync_engine, updater};
 use crate::state::{AppCtx, AppSettings, SyncState, UpdateInfo};
 use serde::Serialize;
 use serde_json::Value;
@@ -12,95 +12,35 @@ use vibe_core::ProviderRateLimit;
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
     configured: bool,
-    api_url: String,
     version: String,
     is_dev: bool,
     runtime_available: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    api_key_display: Option<String>,
+    /// Path of the local usage store (shown in settings; data never leaves it).
+    store_path: String,
+    hostname: Option<String>,
 }
 
 #[tauri::command]
 pub fn get_app_status(app: AppHandle) -> AppStatus {
     let ctx = app.state::<AppCtx>();
     let config = ctx.config.load();
-    let api_key = config.as_ref().and_then(|c| c.api_key.clone());
-    let api_url = config
-        .as_ref()
-        .and_then(|c| c.api_url.clone())
-        .unwrap_or_else(|| ctx.config.default_api_url().to_string());
-
-    let api_key_display = api_key.as_ref().map(|key| {
-        if key.chars().count() > 12 {
-            let prefix: String = key.chars().take(8).collect();
-            let suffix: String = key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
-            format!("{prefix}...{suffix}")
-        } else {
-            key.clone()
-        }
-    });
-
     AppStatus {
-        configured: api_key.is_some(),
-        api_url,
+        configured: ctx.config.is_configured(),
         version: app.package_info().version.to_string(),
         is_dev: crate::state::IS_DEV,
         runtime_available: sync_engine::detect_runtime(&app).is_some(),
-        api_key_display,
+        store_path: ctx
+            .config
+            .store_path()
+            .to_string_lossy()
+            .into_owned(),
+        hostname: config.as_ref().and_then(|c| c.hostname.clone()),
     }
 }
 
 #[tauri::command]
 pub async fn fetch_usage(app: AppHandle, query: UsageQuery) -> Result<Value, String> {
-    let (http, base_url, api_key) = {
-        let ctx = app.state::<AppCtx>();
-        let config = ctx.config.load().ok_or("未配置")?;
-        let api_key = config.api_key.ok_or("未配置")?;
-        let base_url = config
-            .api_url
-            .unwrap_or_else(|| ctx.config.default_api_url().to_string());
-        (ctx.http.clone(), base_url, api_key)
-    };
-    api_client::fetch_usage(&http, &base_url, &api_key, &query)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-// -- Device link --------------------------------------------------------------
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceLinkStart {
-    user_code: String,
-}
-
-#[tauri::command]
-pub async fn start_device_link(app: AppHandle) -> Result<DeviceLinkStart, String> {
-    device_link::start(app).await.map(|user_code| DeviceLinkStart { user_code })
-}
-
-#[tauri::command]
-pub fn cancel_device_link(app: AppHandle) {
-    device_link::cancel(&app);
-}
-
-/// CI / no-browser fallback — validates the pre-issued key with a live
-/// `GET /api/usage?days=1` before saving (mirrors CLI --manual-key intent).
-#[tauri::command]
-pub async fn set_manual_key(app: AppHandle, api_key: String) -> Result<(), String> {
-    let api_key = api_key.trim().to_string();
-    if !api_key.starts_with("vbu_") {
-        return Err("API Key 必须以 vbu_ 开头".into());
-    }
-    let (http, base_url) = {
-        let ctx = app.state::<AppCtx>();
-        (ctx.http.clone(), ctx.config.default_api_url().to_string())
-    };
-    api_client::fetch_usage(&http, &base_url, &api_key, &UsageQuery::Days { days: 1 })
-        .await
-        .map_err(|e| e.to_string())?;
-    device_link::configure(&app, api_key, base_url);
-    Ok(())
+    usage_reader::fetch_usage(&app, &query).await
 }
 
 // -- Sync ---------------------------------------------------------------------
@@ -166,13 +106,19 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
     auto_launch::set(enabled)
 }
 
+/// 重置: delete config + local usage store, then rebuild from raw tool logs
+/// right away (offline — no relink step). Keeps the Codex parser cache.
 #[tauri::command]
 pub fn reset_config(app: AppHandle) -> Result<(), String> {
-    scheduler::stop(&app);
     let ctx = app.state::<AppCtx>();
     ctx.config.reset().map_err(|e| e.to_string())?;
     *ctx.tray_stats.lock().unwrap() = None;
     crate::tray::update_tray(&app);
+    // Rebuild immediately so the dashboard doesn't sit empty until the next
+    // 30-minute tick.
+    tauri::async_runtime::spawn(async move {
+        sync_engine::run_sync(app).await;
+    });
     Ok(())
 }
 

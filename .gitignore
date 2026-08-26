@@ -6,3 +6,5 @@ src-tauri/resources/node/
 *.log
 .DS_Store
 tsconfig.tsbuildinfo
+VibeUsage-*-Windows-Setup.exe
+latest.json

@@ -87,7 +87,6 @@ pub struct AppCtx {
     pub sync_state: Mutex<SyncState>,
     /// Mutual exclusion for the CLI subprocess (同步已在进行中 guard).
     pub sync_running: tokio::sync::Mutex<()>,
-    pub device_link_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub scheduler_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub rate_limits: Mutex<RateLimitCache>,
     pub update_info: Mutex<Option<UpdateInfo>>,
@@ -115,7 +114,6 @@ impl AppCtx {
             settings: Mutex::new(settings),
             sync_state: Mutex::new(SyncState::default()),
             sync_running: tokio::sync::Mutex::new(()),
-            device_link_task: Mutex::new(None),
             scheduler_task: Mutex::new(None),
             rate_limits: Mutex::new(RateLimitCache::default()),
             update_info: Mutex::new(None),
@@ -127,16 +125,6 @@ impl AppCtx {
         let settings = self.settings.lock().unwrap().clone();
         if let Ok(data) = serde_json::to_string_pretty(&settings) {
             let _ = vibe_core::config::atomic_write(&self.settings_path, data.as_bytes());
-        }
-    }
-
-    pub fn hostname() -> Option<String> {
-        let raw = gethostname::gethostname().to_string_lossy().to_string();
-        let cleaned = raw.trim().trim_end_matches(".local").to_string();
-        if cleaned.is_empty() {
-            None
-        } else {
-            Some(cleaned)
         }
     }
 }

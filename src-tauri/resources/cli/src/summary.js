@@ -1,35 +1,14 @@
-import https from 'node:https';
-import http from 'node:http';
-import { URL } from 'node:url';
-import { loadConfig } from './config.js';
+import { loadStore, getStorePath } from './store.js';
+import { getPriceTable, estimateBucketCost } from './pricing.js';
 
 export async function runSummary(args = []) {
   const days = parseDays(args);
-  const config = loadConfig();
-  if (!config?.apiKey) {
-    console.error('No vibe-usage config found. Run `npx @vibe-cafe/vibe-usage init` first.');
-    process.exit(1);
-  }
-
-  const url = new URL('/api/usage', config.apiUrl || 'https://vibecafe.ai');
-  url.searchParams.set('days', String(days));
-
-  let data;
-  try {
-    data = await fetchJson(url, config.apiKey);
-  } catch (err) {
-    if (err.statusCode === 401) {
-      console.error('API key invalid or revoked. Run `npx @vibe-cafe/vibe-usage init` to re-link.');
-    } else {
-      console.error(`Failed to fetch usage: ${err.message}`);
-    }
-    process.exit(1);
-  }
-
-  console.log(render(data, days));
+  const store = loadStore();
+  const prices = await getPriceTable();
+  console.log(render(store, prices, days));
 }
 
-function parseDays(args) {
+export function parseDays(args) {
   const idx = args.findIndex(a => a === '--days');
   if (idx === -1) return 7;
   const v = parseInt(args[idx + 1], 10);
@@ -38,29 +17,37 @@ function parseDays(args) {
   return v;
 }
 
-function render(data, days) {
-  const buckets = Array.isArray(data?.buckets) ? data.buckets : [];
-  const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+export function render(store, prices, days) {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const buckets = Object.values(store.buckets)
+    .map(entry => entry.data)
+    .filter(b => b.bucketStart >= cutoff);
+  const sessions = Object.values(store.sessions)
+    .map(entry => entry.data)
+    .filter(s => (s.lastMessageAt || '') >= cutoff);
 
   if (buckets.length === 0) {
-    return `# Vibe Usage Summary (Last ${days} ${days === 1 ? 'day' : 'days'})\n\n暂无数据。运行 \`npx @vibe-cafe/vibe-usage sync\` 上传本地 token 记录。\n\n详情: https://vibecafe.ai/usage\n`;
+    return `# Vibe Usage Summary (Last ${days} ${days === 1 ? 'day' : 'days'})\n\n暂无数据。运行 \`npx @vibe-cafe/vibe-usage sync\` 从本地日志统计 token 用量。\n`;
   }
 
   let totalCost = 0;
   let totalTokens = 0;
+  let unpricedTokens = 0;
+  const hasPricing = Object.keys(prices.models).length > 0;
   const byModel = new Map();
   const byProject = new Map();
 
   for (const b of buckets) {
-    const cost = Number(b.estimatedCost ?? 0);
+    const cost = hasPricing ? estimateBucketCost(prices.models, b) : null;
+    const priced = cost !== null;
+    if (priced) totalCost += cost;
+    else unpricedTokens += Number(b.totalTokens ?? 0);
     const tokens = Number(b.totalTokens ?? 0);
-    totalCost += cost;
     totalTokens += tokens;
-    accumulate(byModel, b.model, { cost, tokens });
-    accumulate(byProject, b.project || 'unknown', { cost, tokens, sessions: 0 });
+    accumulate(byModel, b.model, { cost: priced ? cost : 0, tokens, priced });
+    accumulate(byProject, b.project || 'unknown', { cost: priced ? cost : 0, tokens, sessions: 0 });
   }
 
-  const sessionsCount = sessions.length;
   let activeSeconds = 0;
   for (const s of sessions) {
     activeSeconds += Number(s.activeSeconds ?? 0);
@@ -72,7 +59,7 @@ function render(data, days) {
   const lines = [];
   lines.push(`# Vibe Usage Summary (Last ${days} ${days === 1 ? 'day' : 'days'})`);
   lines.push('');
-  lines.push(`**总览**: $${totalCost.toFixed(2)} · ${formatTokens(totalTokens)} tokens · ${sessionsCount} sessions · ${activeHours.toFixed(1)}h active`);
+  lines.push(`**总览**: $${totalCost.toFixed(2)} · ${formatTokens(totalTokens)} tokens · ${sessions.length} sessions · ${activeHours.toFixed(1)}h active`);
   lines.push('');
 
   lines.push('## 按模型');
@@ -94,13 +81,20 @@ function render(data, days) {
   }
   lines.push('');
 
-  lines.push('详情: https://vibecafe.ai/usage');
+  if (unpricedTokens > 0) {
+    lines.push(`> 另有 ${formatTokens(unpricedTokens)} tokens 的模型无价格数据，未计入费用。`);
+    lines.push('');
+  }
+  lines.push(`数据: ${getStorePath()} · 价格表更新于 ${prices.fetchedAt?.slice(0, 10) || 'unknown'}（本地估算，仅供参考）`);
   return lines.join('\n');
 }
 
 function accumulate(map, key, delta) {
-  const cur = map.get(key) || { cost: 0, tokens: 0, sessions: 0 };
-  for (const k of Object.keys(delta)) cur[k] = (cur[k] || 0) + delta[k];
+  const cur = map.get(key) || { cost: 0, tokens: 0, sessions: 0, priced: true };
+  for (const k of Object.keys(delta)) {
+    if (k === 'priced') cur.priced = cur.priced && delta.priced;
+    else cur[k] = (cur[k] || 0) + delta[k];
+  }
   map.set(key, cur);
 }
 
@@ -114,33 +108,4 @@ function formatTokens(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(0) + 'K';
   return String(n);
-}
-
-function fetchJson(url, apiKey) {
-  return new Promise((resolve, reject) => {
-    const mod = url.protocol === 'https:' ? https : http;
-    const req = mod.request(url, {
-      method: 'GET',
-      timeout: 15_000,
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        if (res.statusCode === 401) {
-          const err = new Error('Unauthorized'); err.statusCode = 401; reject(err); return;
-        }
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          const err = new Error(`HTTP ${res.statusCode}: ${data.slice(0, 200)}`);
-          err.statusCode = res.statusCode;
-          reject(err); return;
-        }
-        try { resolve(JSON.parse(data)); }
-        catch { reject(new Error('Invalid JSON response')); }
-      });
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout (15s)')); });
-    req.end();
-  });
 }

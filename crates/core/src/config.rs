@@ -1,12 +1,13 @@
 //! `~/.vibe-usage/config.json` IO — port of Models/Config.swift + AppConfig.swift.
 //! Shared contract with the CLI: both read/write the same file.
+//!
+//! Offline app: there is no account or API key. "Configured" means the
+//! offline CLI has run once (hostname captured) or a local usage store
+//! already exists.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-
-pub const RELEASE_API_URL: &str = "https://vibecafe.ai";
-pub const DEV_API_URL: &str = "http://localhost:3000";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct VibeUsageConfig {
@@ -17,24 +18,19 @@ pub struct VibeUsageConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_sync: Option<String>,
+    pub codex_extra_home: Option<String>,
 }
 
-// The CLI writes camelCase keys; keep byte-compatible.
+// The CLI writes camelCase keys; keep byte-compatible. Tolerated legacy
+// fields (apiKey/apiUrl from the online era) are read but never written.
 impl VibeUsageConfig {
     fn to_json(&self) -> serde_json::Value {
         let mut obj = serde_json::Map::new();
-        if let Some(v) = &self.api_key {
-            obj.insert("apiKey".into(), v.clone().into());
-        }
-        if let Some(v) = &self.api_url {
-            obj.insert("apiUrl".into(), v.clone().into());
-        }
         if let Some(v) = &self.hostname {
             obj.insert("hostname".into(), v.clone().into());
         }
-        if let Some(v) = &self.last_sync {
-            obj.insert("lastSync".into(), v.clone().into());
+        if let Some(v) = &self.codex_extra_home {
+            obj.insert("codexExtraHome".into(), v.clone().into());
         }
         serde_json::Value::Object(obj)
     }
@@ -45,7 +41,7 @@ impl VibeUsageConfig {
             api_key: s("apiKey"),
             api_url: s("apiUrl"),
             hostname: s("hostname"),
-            last_sync: s("lastSync"),
+            codex_extra_home: s("codexExtraHome"),
         }
     }
 }
@@ -81,19 +77,17 @@ impl ConfigManager {
         self.config_dir.join(self.config_file_name())
     }
 
-    /// Mirrors the CLI's state.js dev split (state.dev.json under
-    /// VIBE_USAGE_DEV) — reset in a dev build must never touch prod state.
-    pub fn state_path(&self) -> PathBuf {
+    /// Mirrors the CLI's store.js dev split (usage.dev.json under
+    /// VIBE_USAGE_DEV) — reset in a dev build must never touch prod data.
+    pub fn store_path(&self) -> PathBuf {
         self.config_dir
-            .join(if self.is_dev { "state.dev.json" } else { "state.json" })
+            .join(if self.is_dev { "usage.dev.json" } else { "usage.json" })
     }
 
-    pub fn default_api_url(&self) -> &'static str {
-        if self.is_dev {
-            DEV_API_URL
-        } else {
-            RELEASE_API_URL
-        }
+    /// Offline CLI parser cache (kept across resets so a rebuild doesn't
+    /// require a full raw-log rescan — mirrors the CLI's reset behavior).
+    pub fn cache_dir(&self) -> PathBuf {
+        self.config_dir.join("cache")
     }
 
     pub fn load(&self) -> Option<VibeUsageConfig> {
@@ -129,16 +123,22 @@ impl ConfigManager {
         atomic_write(&self.config_path(), data.as_bytes())
     }
 
+    /// Offline semantics: ready once the CLI has captured a hostname at
+    /// init/first sync, or a local usage store already exists (e.g. the
+    /// user runs the standalone CLI too).
     pub fn is_configured(&self) -> bool {
-        self.load().and_then(|c| c.api_key).is_some()
+        if self.load().and_then(|c| c.hostname).is_some() {
+            return true;
+        }
+        self.store_path().is_file()
     }
 
-    /// 重置配置: delete config AND state.json so the CLI re-uploads from
-    /// scratch on next link (state holds incremental-sync hashes; leaving it
-    /// behind means a re-linked account would upload nothing).
+    /// 重置配置: delete config AND the local usage store so the next sync
+    /// rebuilds statistics from the raw tool logs. The Codex parser cache is
+    /// intentionally kept (mirrors the CLI's `reset`).
     pub fn reset(&self) -> std::io::Result<()> {
         let _ = fs::remove_file(self.config_path());
-        let _ = fs::remove_file(self.state_path());
+        let _ = fs::remove_file(self.store_path());
         Ok(())
     }
 }
@@ -176,16 +176,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let mgr = ConfigManager::with_dir(dir.path().to_path_buf(), false);
         let cfg = VibeUsageConfig {
-            api_key: Some("vbu_test123".into()),
-            api_url: Some("https://vibecafe.ai".into()),
             hostname: Some("my-pc".into()),
-            last_sync: None,
+            codex_extra_home: None,
+            api_key: None,
+            api_url: None,
         };
         mgr.save(&cfg).unwrap();
 
         let raw = std::fs::read_to_string(mgr.config_path()).unwrap();
-        assert!(raw.contains("\"apiKey\""), "must write camelCase: {raw}");
-        assert!(raw.contains("\"apiUrl\""));
+        assert!(raw.contains("\"hostname\""), "must write camelCase: {raw}");
+        assert!(!raw.contains("apiKey"), "must not write legacy online fields");
 
         let loaded = mgr.load().unwrap();
         assert_eq!(loaded, cfg);
@@ -199,12 +199,22 @@ mod tests {
         std::fs::create_dir_all(dir.path()).unwrap();
         std::fs::write(
             mgr.config_path(),
-            r#"{"apiKey":"vbu_abc","apiUrl":"https://vibecafe.ai","hostname":"host-1"}"#,
+            r#"{"hostname":"host-1","codexExtraHome":"D:\\codex2"}"#,
         )
         .unwrap();
         let cfg = mgr.load().unwrap();
-        assert_eq!(cfg.api_key.as_deref(), Some("vbu_abc"));
         assert_eq!(cfg.hostname.as_deref(), Some("host-1"));
+        assert_eq!(cfg.codex_extra_home.as_deref(), Some("D:\\codex2"));
+        assert!(mgr.is_configured());
+    }
+
+    #[test]
+    fn configured_when_only_the_local_store_exists() {
+        let dir = tempdir().unwrap();
+        let mgr = ConfigManager::with_dir(dir.path().to_path_buf(), false);
+        assert!(!mgr.is_configured());
+        std::fs::write(mgr.store_path(), "{}").unwrap();
+        assert!(mgr.is_configured());
     }
 
     #[test]
@@ -215,47 +225,47 @@ mod tests {
         // CLI wrote hostname + a hypothetical future field.
         std::fs::write(
             mgr.config_path(),
-            r#"{"apiKey":"vbu_old","hostname":"cli-host","futureField":{"x":1}}"#,
+            r#"{"hostname":"cli-host","futureField":{"x":1}}"#,
         )
         .unwrap();
 
-        // App relinks: updates apiKey/apiUrl only.
+        // App updates hostname only.
         mgr.save(&VibeUsageConfig {
-            api_key: Some("vbu_new".into()),
-            api_url: Some("https://vibecafe.ai".into()),
+            hostname: Some("app-host".into()),
             ..Default::default()
         })
         .unwrap();
 
         let raw: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(mgr.config_path()).unwrap()).unwrap();
-        assert_eq!(raw["apiKey"], "vbu_new");
-        assert_eq!(raw["hostname"], "cli-host", "CLI-owned field must survive");
+        assert_eq!(raw["hostname"], "app-host");
         assert_eq!(raw["futureField"]["x"], 1, "unknown fields must survive");
     }
 
     #[test]
-    fn dev_state_path_is_split() {
+    fn dev_store_path_is_split() {
         let dir = tempdir().unwrap();
         let prod = ConfigManager::with_dir(dir.path().to_path_buf(), false);
         let dev = ConfigManager::with_dir(dir.path().to_path_buf(), true);
-        assert!(prod.state_path().ends_with("state.json"));
-        assert!(dev.state_path().ends_with("state.dev.json"));
+        assert!(prod.store_path().ends_with("usage.json"));
+        assert!(dev.store_path().ends_with("usage.dev.json"));
     }
 
     #[test]
-    fn reset_removes_config_and_state() {
+    fn reset_removes_config_and_store_but_keeps_cache() {
         let dir = tempdir().unwrap();
         let mgr = ConfigManager::with_dir(dir.path().to_path_buf(), false);
         mgr.save(&VibeUsageConfig {
-            api_key: Some("vbu_x".into()),
+            hostname: Some("h".into()),
             ..Default::default()
         })
         .unwrap();
-        std::fs::write(mgr.state_path(), "{}").unwrap();
+        std::fs::write(mgr.store_path(), "{}").unwrap();
+        std::fs::create_dir_all(mgr.cache_dir().join("codex")).unwrap();
         mgr.reset().unwrap();
         assert!(!mgr.config_path().exists());
-        assert!(!mgr.state_path().exists());
+        assert!(!mgr.store_path().exists());
+        assert!(mgr.cache_dir().join("codex").is_dir(), "parser cache must survive reset");
     }
 
     #[test]
@@ -263,6 +273,5 @@ mod tests {
         let dir = tempdir().unwrap();
         let mgr = ConfigManager::with_dir(dir.path().to_path_buf(), true);
         assert_eq!(mgr.config_file_name(), "config.dev.json");
-        assert_eq!(mgr.default_api_url(), DEV_API_URL);
     }
 }

@@ -69,6 +69,7 @@ fn now_ms() -> u64 {
 }
 
 /// Run one sync. Concurrent calls return immediately (同步已在进行中).
+/// Offline: no login gate — the CLI imports local logs into the local store.
 pub async fn run_sync(app: AppHandle) {
     let ctx = app.state::<AppCtx>();
 
@@ -76,10 +77,6 @@ pub async fn run_sync(app: AppHandle) {
         log::info!("sync already running");
         return;
     };
-
-    if !ctx.config.is_configured() {
-        return;
-    }
 
     set_state(&app, |s| {
         s.status = SyncStatus::Syncing;
@@ -150,18 +147,16 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
         "VIBE_USAGE_CONFIG_DIR",
         app.state::<AppCtx>().config.config_dir.clone(),
     );
-    cmd.env("VIBE_USAGE_SURFACE", "windows-app");
     cmd.env(
-        "VIBE_USAGE_SURFACE_VERSION",
-        app.package_info().version.to_string(),
+        "VIBE_USAGE_STORE_DIR",
+        app.state::<AppCtx>().config.config_dir.clone(),
     );
     if crate::state::IS_DEV {
         cmd.env("VIBE_USAGE_DEV", "1");
     }
-    // Node's fetch() ignores the Windows system proxy (macOS URLSession honors
-    // it implicitly — this is why the macOS app never hit the issue). Bridge
-    // the registry proxy into env vars; NODE_USE_ENV_PROXY makes Node ≥22.15
-    // route global fetch through them.
+    // Node's fetch() ignores the Windows system proxy — bridge the registry
+    // proxy into env vars for the CLI's weekly best-effort price refresh
+    // (usage data itself never leaves the machine).
     if std::env::var("HTTPS_PROXY").is_err() && std::env::var("https_proxy").is_err() {
         if let Some(proxy) = process_utils::system_proxy_url() {
             log::info!("bridging system proxy to CLI: {proxy}");
@@ -209,25 +204,50 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
     write_sync_log(app, &status, &stdout, &stderr);
 
     if status.success() {
-        // "Synced …" / "No new usage data" both count as success.
-        Ok(if stdout.is_empty() { "同步完成".into() } else { stdout })
+        // The offline CLI prints a header line plus "已入库 N buckets…" (or
+        // "暂无新数据。") — surface the last meaningful line as the message.
+        Ok(extract_success_line(&stdout))
     } else {
-        let all = format!("{stdout}\n{stderr}");
-        if all.contains("Invalid API key") || all.contains("UNAUTHORIZED") {
-            Err("API Key 无效，请重新配置".into())
-        } else {
-            let msg = if stderr.is_empty() { &stdout } else { &stderr };
-            let line = extract_error_line(msg);
-            Err(format!(
-                "同步失败: {}",
-                if line.is_empty() {
-                    format!("Exit code {}", status.code().unwrap_or(-1))
-                } else {
-                    line
-                }
-            ))
-        }
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        let line = extract_error_line(msg);
+        Err(format!(
+            "同步失败: {}",
+            if line.is_empty() {
+                format!("Exit code {}", status.code().unwrap_or(-1))
+            } else {
+                line
+            }
+        ))
     }
+}
+
+/// Pick the summary line from successful CLI stdout: the header
+/// ("Vibe Usage · by VibeCafé") and dim parser notes are skipped; the last
+/// non-empty, non-dim line ("已入库 81 buckets · 25 sessions" etc.) wins.
+fn extract_success_line(stdout: &str) -> String {
+    let candidates: Vec<&str> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with("Vibe Usage")
+                && !l.starts_with('·')
+                && !l.starts_with("项目名")
+                && !l.contains("正在建立本地索引")
+        })
+        .collect();
+    // Prefer the "已入库"/"暂无新数据" line if present; else the last line.
+    candidates
+        .iter()
+        .rev()
+        .find(|l| l.contains("已入库") || l.contains("暂无新数据"))
+        .or_else(|| candidates.last())
+        .map(|l| {
+            let mut s = (*l).to_string();
+            s.truncate(s.char_indices().map(|(i, _)| i).nth(160).unwrap_or(s.len()));
+            s
+        })
+        .unwrap_or_else(|| "同步完成".into())
 }
 
 /// Pick the most informative line from CLI output. stderr carries non-fatal

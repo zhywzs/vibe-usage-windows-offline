@@ -201,11 +201,12 @@ export interface SyncState {
 
 export interface AppStatus {
   configured: boolean;
-  apiUrl: string;
   version: string;
   isDev: boolean;
   runtimeAvailable: boolean;
-  apiKeyDisplay?: string | null;
+  /** Local usage store — all data stays in this file. */
+  storePath: string;
+  hostname?: string | null;
 }
 
 /** App settings persisted by Rust (mirrors UserDefaults keys). */

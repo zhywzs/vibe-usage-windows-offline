@@ -1,7 +1,7 @@
 {
   "name": "@vibe-cafe/vibe-usage",
-  "version": "0.10.6",
-  "description": "Track your AI coding tool token usage and sync to vibecafe.ai",
+  "version": "0.11.0",
+  "description": "Offline tracker for AI coding tool token usage — data never leaves your machine (fork of vibe-cafe/vibe-usage)",
   "type": "module",
   "scripts": {
     "test": "node --test"
@@ -29,11 +29,11 @@
   "dependencies": {},
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vibe-cafe/vibe-usage.git"
+    "url": "git+https://github.com/zhywzs/vibe-usage-offline.git"
   },
-  "homepage": "https://github.com/vibe-cafe/vibe-usage#readme",
+  "homepage": "https://github.com/zhywzs/vibe-usage-offline#readme",
   "bugs": {
-    "url": "https://github.com/vibe-cafe/vibe-usage/issues"
+    "url": "https://github.com/zhywzs/vibe-usage-offline/issues"
   },
   "license": "MIT"
 }

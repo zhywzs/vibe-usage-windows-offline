@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// Vendor the @vibe-cafe/vibe-usage CLI into src-tauri/resources/cli and apply
-// the Windows patches (upstreamed via the windows-support PR; vendored copies
-// stay patched so releases don't depend on upstream merge timing).
+// Vendor the OFFLINE @vibe-cafe/vibe-usage CLI fork into
+// src-tauri/resources/cli and apply the Windows patches.
 //
 // Usage:
-//   node scripts/vendor-cli.mjs                  # npm pack @vibe-cafe/vibe-usage@latest
-//   node scripts/vendor-cli.mjs --from-local ../vibe-usage   # copy a local checkout
+//   node scripts/vendor-cli.mjs                       # from the sibling checkout ../vibe-usage
+//   node scripts/vendor-cli.mjs --from-local <path>   # explicit checkout path
+//   node scripts/vendor-cli.mjs --from-tarball <tgz>  # a packed tarball of the fork
 //
+// The offline fork must never be resolved from the npm registry — the
+// registry carries the online-era CLI that uploads to vibecafe.ai.
 // The CLI has zero npm dependencies, so vendoring bin/ + src/ + package.json
 // is sufficient — no node_modules.
 
@@ -17,11 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const appPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-const CLI_CHANNEL = appPackage.vibeUsageCliChannel;
-if (CLI_CHANNEL !== "latest") {
-  throw new Error("package.json vibeUsageCliChannel must be latest");
-}
+const DEFAULT_LOCAL = "../vibe-usage";
 const destDir = path.join(root, "src-tauri", "resources", "cli");
 
 function log(msg) {
@@ -38,39 +36,40 @@ function copyDir(src, dest) {
   }
 }
 
-function vendorFromLocal(localPath) {
-  const abs = path.resolve(root, localPath);
-  log(`vendoring from local checkout: ${abs}`);
+function copyPackage(pkgDir) {
   for (const p of ["bin", "src", "package.json"]) {
-    if (!fs.existsSync(path.join(abs, p))) {
-      throw new Error(`local checkout missing ${p}/ — wrong path?`);
+    if (!fs.existsSync(path.join(pkgDir, p))) {
+      throw new Error(`CLI package missing ${p}/ — wrong path?`);
     }
   }
   fs.rmSync(destDir, { recursive: true, force: true });
-  copyDir(path.join(abs, "bin"), path.join(destDir, "bin"));
-  copyDir(path.join(abs, "src"), path.join(destDir, "src"));
-  fs.copyFileSync(path.join(abs, "package.json"), path.join(destDir, "package.json"));
+  copyDir(path.join(pkgDir, "bin"), path.join(destDir, "bin"));
+  copyDir(path.join(pkgDir, "src"), path.join(destDir, "src"));
+  fs.copyFileSync(path.join(pkgDir, "package.json"), path.join(destDir, "package.json"));
 }
 
-function vendorFromNpm() {
-  log(`npm pack @vibe-cafe/vibe-usage@${CLI_CHANNEL}`);
+function vendorFromLocal(localPath) {
+  const abs = path.resolve(root, localPath);
+  log(`vendoring from local checkout: ${abs}`);
+  copyPackage(abs);
+}
+
+function vendorFromTarball(tarballPath) {
+  const abs = path.resolve(root, tarballPath);
+  if (!fs.existsSync(abs)) throw new Error(`tarball not found: ${abs}`);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibe-cli-"));
   try {
-    const out = execFileSync(
-      "npm",
-      ["pack", `@vibe-cafe/vibe-usage@${CLI_CHANNEL}`, "--pack-destination", tmp],
-      { encoding: "utf8", shell: process.platform === "win32" },
-    ).trim();
-    const tarball = path.join(tmp, out.split("\n").pop().trim());
-    execFileSync("tar", ["-xzf", tarball, "-C", tmp], { stdio: "inherit" });
-    const pkgDir = path.join(tmp, "package");
-    fs.rmSync(destDir, { recursive: true, force: true });
-    copyDir(path.join(pkgDir, "bin"), path.join(destDir, "bin"));
-    copyDir(path.join(pkgDir, "src"), path.join(destDir, "src"));
-    fs.copyFileSync(path.join(pkgDir, "package.json"), path.join(destDir, "package.json"));
+    execFileSync("tar", ["-xzf", abs, "-C", tmp], { stdio: "inherit" });
+    log(`vendoring from tarball: ${abs}`);
+    copyPackage(path.join(tmp, "package"));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+function optionValue(name) {
+  const idx = process.argv.indexOf(name);
+  return idx >= 0 ? process.argv[idx + 1] : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,32 +90,7 @@ function patchFile(rel, replacements) {
 }
 
 function applyWindowsPatches() {
-  // 1. `start` is a cmd.exe builtin — execFile('start', ...) fails on Windows.
-  patchFile("src/init.js", [
-    [
-      `function openBrowser(url) {
-  const cmds = { darwin: 'open', linux: 'xdg-open', win32: 'start' };
-  const cmd = cmds[platform()] || cmds.linux;
-  // Use execFile with args array to avoid shell injection via VIBE_USAGE_API_URL
-  execFile(cmd, [url], () => {});
-}`,
-      `function openBrowser(url) {
-  if (platform() === 'win32') {
-    // \`start\` is a cmd.exe builtin, not an executable — go through cmd /c.
-    // Empty title arg keeps quoted URLs intact; ^& escapes query ampersands.
-    execFile('cmd', ['/c', 'start', '', url.replace(/&/g, '^&')], { windowsHide: true }, () => {});
-    return;
-  }
-  const cmds = { darwin: 'open', linux: 'xdg-open' };
-  const cmd = cmds[platform()] || cmds.linux;
-  // Use execFile with args array to avoid shell injection via VIBE_USAGE_API_URL
-  execFile(cmd, [url], () => {});
-}`,
-      "openBrowser win32",
-    ],
-  ]);
-
-  // 2. Windows cwd uses backslashes — project extraction must split on both.
+  // 1. Windows cwd uses backslashes — project extraction must split on both.
   patchFile("src/parsers/codex.js", [
     [
       "if (meta.cwd) return meta.cwd.split('/').pop() || 'unknown';",
@@ -132,7 +106,7 @@ function applyWindowsPatches() {
     ],
   ]);
 
-  // 3. OpenCode on Windows stores data under %LOCALAPPDATA%\\opencode.
+  // 2. OpenCode on Windows stores data under %LOCALAPPDATA%\opencode.
   patchFile("src/parsers/opencode.js", [
     [
       "const DATA_DIR = join(homedir(), '.local', 'share', 'opencode');",
@@ -149,7 +123,7 @@ const DATA_DIR = resolveOpencodeDataDir();`,
     ],
   ]);
 
-  // 4. Amp on Windows: %LOCALAPPDATA%\\amp\\threads (XDG default kept last).
+  // 3. Amp on Windows: %LOCALAPPDATA%\amp\threads (XDG default kept last).
   patchFile("src/parsers/amp.js", [
     [
       "  if (process.env.XDG_DATA_HOME) return join(process.env.XDG_DATA_HOME, 'amp', 'threads');\n  return join(homedir(), '.local', 'share', 'amp', 'threads');",
@@ -163,9 +137,23 @@ const DATA_DIR = resolveOpencodeDataDir();`,
     ],
   ]);
 
-  // 5. The app invokes the CLI from a bundled runtime. Keep CLI config/state
-  // in the app config dir, and repair accidental directory-at-file-path cases
-  // so sync cannot fail with EISDIR when writing config.json/state.json.
+  // 4. Repair accidental directory-at-file-path cases so sync cannot fail
+  // with EISDIR when writing config.json / usage.json.
+  const eisdirHelpers = `function backupPath(path) {
+  return \`\${path}.directory-backup-\${Date.now()}\`;
+}
+
+function moveDirectoryOutOfFilePath(path) {
+  try {
+    if (statSync(path).isDirectory()) {
+      renameSync(path, backupPath(path));
+    }
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+}
+
+`;
   patchFile("src/config.js", [
     [
       "import { readFileSync, writeFileSync, chmodSync, mkdirSync, existsSync } from 'node:fs';",
@@ -174,83 +162,58 @@ const DATA_DIR = resolveOpencodeDataDir();`,
     ],
     [
       "export function getConfigPath() {",
-      `function backupPath(path) {
-  return \`\${path}.directory-backup-\${Date.now()}\`;
-}
-
-function moveDirectoryOutOfFilePath(path) {
-  try {
-    if (statSync(path).isDirectory()) {
-      renameSync(path, backupPath(path));
-    }
-  } catch (err) {
-    if (err?.code !== 'ENOENT') throw err;
-  }
-}
-
-export function getConfigPath() {`,
+      `${eisdirHelpers}export function getConfigPath() {`,
       "config EISDIR repair helpers",
     ],
     [
-      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  // The file holds the vbu_ API key",
-      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(CONFIG_FILE);\n  // The file holds the vbu_ API key",
+      "  mkdirSync(CONFIG_DIR, { recursive: true });",
+      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(CONFIG_FILE);",
       "config save EISDIR repair",
     ],
   ]);
-
-  patchFile("src/state.js", [
+  patchFile("src/store.js", [
     [
-      "import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync } from 'node:fs';",
-      "import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync, renameSync, statSync } from 'node:fs';",
-      "state fs helpers",
+      "import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync, renameSync, rmSync } from 'node:fs';",
+      "import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync, renameSync, rmSync, statSync } from 'node:fs';",
+      "store fs helpers",
     ],
     [
-      "const STATE_DIR = process.env.VIBE_USAGE_STATE_DIR?.trim() || join(homedir(), '.vibe-usage');",
-      "const STATE_DIR = process.env.VIBE_USAGE_STATE_DIR?.trim() || process.env.VIBE_USAGE_CONFIG_DIR?.trim() || join(homedir(), '.vibe-usage');",
-      "state app dir override",
+      "export function getStorePath() {",
+      `${eisdirHelpers}export function getStorePath() {`,
+      "store EISDIR repair helpers",
     ],
     [
-      "export function getStatePath() {",
-      `function backupPath(path) {
-  return \`\${path}.directory-backup-\${Date.now()}\`;
-}
-
-function moveDirectoryOutOfFilePath(path) {
-  try {
-    if (statSync(path).isDirectory()) {
-      renameSync(path, backupPath(path));
-    }
-  } catch (err) {
-    if (err?.code !== 'ENOENT') throw err;
-  }
-}
-
-export function getStatePath() {`,
-      "state EISDIR repair helpers",
-    ],
-    [
-      "  mkdirSync(STATE_DIR, { recursive: true });\n  writeFileSync(STATE_FILE, JSON.stringify(state) + '\\n', 'utf-8');",
-      "  mkdirSync(STATE_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(STATE_FILE);\n  writeFileSync(STATE_FILE, JSON.stringify(state) + '\\n', 'utf-8');",
-      "state save EISDIR repair",
+      "  const tempPath = `${STORE_FILE}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;",
+      "  moveDirectoryOutOfFilePath(STORE_FILE);\n  const tempPath = `${STORE_FILE}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;",
+      "store save EISDIR repair",
     ],
   ]);
 }
 
 // ---------------------------------------------------------------------------
 
-const localFlag = process.argv.indexOf("--from-local");
-if (localFlag >= 0) {
-  vendorFromLocal(process.argv[localFlag + 1] ?? "../vibe-usage");
+const localFlag = optionValue("--from-local");
+const tarballFlag = optionValue("--from-tarball");
+if (tarballFlag) {
+  vendorFromTarball(tarballFlag);
 } else {
-  // A release must contain the registry's current dist-tag. Never silently
-  // fall back to a sibling checkout; --from-local is an explicit dev-only path.
-  vendorFromNpm();
+  // Offline fork only — never resolve from the npm registry (it carries the
+  // online-era CLI that uploads usage to vibecafe.ai).
+  vendorFromLocal(localFlag ?? DEFAULT_LOCAL);
 }
 
 applyWindowsPatches();
 
+// Guard: the vendored CLI must be the offline fork — it ships the local
+// store (src/store.js) and never the online-era uploader (src/api.js).
 const pkg = JSON.parse(fs.readFileSync(path.join(destDir, "package.json"), "utf8"));
 if (pkg.name !== "@vibe-cafe/vibe-usage" || !/^\d+\.\d+\.\d+(?:[-+].+)?$/.test(pkg.version)) {
   throw new Error(`invalid vendored CLI identity: ${pkg.name}@${pkg.version}`);
 }
-log(`resolved @${CLI_CHANNEL} to ${pkg.name}@${pkg.version} → ${path.relative(root, destDir)}`);
+if (!fs.existsSync(path.join(destDir, "src", "store.js"))) {
+  throw new Error("vendored CLI is not the offline fork (missing src/store.js)");
+}
+if (fs.existsSync(path.join(destDir, "src", "api.js"))) {
+  throw new Error("vendored CLI looks like the online-era build (found src/api.js)");
+}
+log(`vendored offline CLI ${pkg.name}@${pkg.version} → ${path.relative(root, destDir)}`);

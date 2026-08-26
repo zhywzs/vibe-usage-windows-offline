@@ -1,48 +1,37 @@
-import { afterEach, expect, test, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { expect, test } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
 
-const originalSurface = process.env.VIBE_USAGE_SURFACE;
-const originalSurfaceVersion = process.env.VIBE_USAGE_SURFACE_VERSION;
-
-afterEach(() => {
-  if (originalSurface === undefined) delete process.env.VIBE_USAGE_SURFACE;
-  else process.env.VIBE_USAGE_SURFACE = originalSurface;
-  if (originalSurfaceVersion === undefined) delete process.env.VIBE_USAGE_SURFACE_VERSION;
-  else process.env.VIBE_USAGE_SURFACE_VERSION = originalSurfaceVersion;
-  vi.resetModules();
+test("the vendored CLI is the offline fork", () => {
+  // Local store present, online-era uploader absent.
+  expect(existsSync("src-tauri/resources/cli/src/store.js")).toBe(true);
+  expect(existsSync("src-tauri/resources/cli/src/pricing.js")).toBe(true);
+  expect(existsSync("src-tauri/resources/cli/src/api.js")).toBe(false);
+  expect(existsSync("src-tauri/resources/cli/src/client-meta.js")).toBe(false);
+  expect(existsSync("src-tauri/resources/cli/src/parsers/cursor.js")).toBe(false);
 });
 
-test("vendored CLI reports its real version and the Windows App identity", async () => {
-  const appPackage = JSON.parse(readFileSync("package.json", "utf-8"));
-  const vendoredPackage = JSON.parse(
-    readFileSync("src-tauri/resources/cli/package.json", "utf-8"),
-  );
-  process.env.VIBE_USAGE_SURFACE = "windows-app";
-  process.env.VIBE_USAGE_SURFACE_VERSION = appPackage.version;
-  vi.resetModules();
-
-  const { createSyncClient } = await import(
-    "../src-tauri/resources/cli/src/client-meta.js"
-  );
-  const client = createSyncClient({ hostname: "windows-pc" });
-
-  expect(client.collectorVersion).toBe(vendoredPackage.version);
-  expect(client.surface).toBe("windows-app");
-  expect(client.surfaceVersion).toBe(appPackage.version);
-});
-
-test("Tauri sync injects the Windows App surface and package version", () => {
+test("Tauri sync no longer injects the online-era upload-surface envs", () => {
   const source = readFileSync("src-tauri/src/services/sync_engine.rs", "utf-8");
-  expect(source).toContain('cmd.env("VIBE_USAGE_SURFACE", "windows-app")');
-  expect(source).toContain('"VIBE_USAGE_SURFACE_VERSION"');
-  expect(source).toContain("app.package_info().version.to_string()");
+  expect(source).not.toContain("VIBE_USAGE_SURFACE");
+  // Offline identity envs must point the CLI's config/store at the shared dir.
+  expect(source).toContain('"VIBE_USAGE_CONFIG_DIR"');
+  expect(source).toContain('"VIBE_USAGE_STORE_DIR"');
 });
 
-test("release vendoring resolves npm latest without an implicit local fallback", () => {
-  const packageJson = JSON.parse(readFileSync("package.json", "utf-8"));
+test("vendoring never resolves the CLI from the npm registry", () => {
   const vendorScript = readFileSync("scripts/vendor-cli.mjs", "utf-8");
+  expect(vendorScript).not.toContain("npm pack");
+  expect(vendorScript).toContain("vendorFromLocal");
+  // And the release gate enforces the offline fork.
+  const gate = readFileSync("scripts/check-version.mjs", "utf-8");
+  expect(gate).toContain("missing src/store.js");
+  expect(gate).toContain("found src/api.js");
+});
 
-  expect(packageJson.vibeUsageCliChannel).toBe("latest");
-  expect(vendorScript).toContain("@vibe-cafe/vibe-usage@${CLI_CHANNEL}");
-  expect(vendorScript).not.toContain("falling back to ../vibe-usage");
+test("usage queries stay local — fetch spawns the CLI, not an HTTP endpoint", () => {
+  const source = readFileSync("src-tauri/src/services/usage_reader.rs", "utf-8");
+  expect(source).toContain('.arg("usage")');
+  expect(source).not.toContain("/api/usage");
+  expect(existsSync("src-tauri/src/services/api_client.rs")).toBe(false);
+  expect(existsSync("src-tauri/src/services/device_link.rs")).toBe(false);
 });

@@ -1,20 +1,29 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, posix, resolve, win32 } from 'node:path';
 import { homedir } from 'node:os';
 import { findClaudeCodeDataDirs } from './claude-roots.js';
+import { findCindyDataDirs, getCindyDataRoots } from './cindy-roots.js';
 import { codexSessionDirs, resolveCodexHomes } from './codex-roots.js';
+import { findClineDataDirs } from './cline-roots.js';
+import { findCraftDataDirs } from './craft-roots.js';
+import { findOmpDataDirs, findPiDataDirs } from './pi-roots.js';
+import { findWorkbuddyDataDirs } from './workbuddy-roots.js';
 
-function getCursorStateDbPath() {
-  const rel = join('User', 'globalStorage', 'state.vscdb');
-  if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'Cursor', rel);
+export function getAlmaDbPath(env = process.env, platform = process.platform, home = homedir()) {
+  const pathImpl = platform === 'win32' ? win32 : posix;
+  const override = env.VIBE_USAGE_ALMA_DB?.trim();
+  if (override) {
+    return platform === process.platform ? resolve(override) : pathImpl.resolve(override);
   }
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA?.trim() || join(homedir(), 'AppData', 'Roaming');
-    return join(appData, 'Cursor', rel);
+  if (platform === 'darwin') {
+    return pathImpl.join(home, 'Library', 'Application Support', 'alma', 'chat_threads.db');
   }
-  const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config');
-  return join(xdgConfigHome, 'Cursor', rel);
+  if (platform === 'win32') {
+    const appData = env.APPDATA?.trim() || pathImpl.join(home, 'AppData', 'Roaming');
+    return pathImpl.join(appData, 'alma', 'chat_threads.db');
+  }
+  const configHome = env.XDG_CONFIG_HOME?.trim() || pathImpl.join(home, '.config');
+  return pathImpl.join(configHome, 'alma', 'chat_threads.db');
 }
 
 function getKiroAgentPath() {
@@ -61,7 +70,6 @@ function findExtensionDirs(extensionId) {
   return dirs;
 }
 
-const findClineDataDirs = () => findExtensionDirs('saoudrizwan.claude-dev');
 const findRooCodeDataDirs = () => findExtensionDirs('rooveterinaryinc.roo-cline');
 
 /** Find all OpenClaw data roots: ~/.openclaw and ~/.openclaw-<profile> */
@@ -98,6 +106,28 @@ function findKimiCodeDataDirs() {
     join(homedir(), '.kimi-code', 'sessions'),
     join(homedir(), '.kimi', 'sessions'),
   ].filter(existsSync);
+}
+
+/** DeepSeek Harness home: DSH_HOME env (same as the dsh CLI) or ~/.dsh. */
+export function getDshHome(env = process.env) {
+  const explicit = env.DSH_HOME?.trim();
+  if (!explicit) return join(homedir(), '.dsh');
+  if (explicit === '~') return homedir();
+  if (explicit.startsWith('~/') || explicit.startsWith('~\\')) {
+    return resolve(homedir(), explicit.slice(2));
+  }
+  return resolve(explicit);
+}
+
+export function getDshSessionsDir() {
+  const testDir = process.env.VIBE_USAGE_DSH_SESSIONS?.trim();
+  if (testDir) return testDir;
+  return join(getDshHome(), 'sessions');
+}
+
+// Detect DeepSeek Harness when its sessions tree exists (or the test override).
+export function findDshDataDirs() {
+  return [getDshSessionsDir()].filter(existsSync);
 }
 
 export function getMimocodeDbPath(env = process.env) {
@@ -176,6 +206,18 @@ export function findDimAgentDataDirs() {
 
 export const TOOLS = [
   {
+    name: 'Alma',
+    id: 'alma',
+    dataDir: getAlmaDbPath(),
+    detectDataDirs: () => [getAlmaDbPath()].filter(existsSync),
+  },
+  {
+    name: 'Cindy',
+    id: 'cindy',
+    dataDir: getCindyDataRoots()[0],
+    detectDataDirs: findCindyDataDirs,
+  },
+  {
     name: 'Claude Code',
     id: 'claude-code',
     dataDir: join(homedir(), '.claude', 'projects'),
@@ -199,9 +241,10 @@ export const TOOLS = [
     dataDir: join(homedir(), '.copilot', 'session-state'),
   },
   {
-    name: 'Cursor',
-    id: 'cursor',
-    dataDir: getCursorStateDbPath(),
+    name: 'CraftAgent',
+    id: 'craft-agent',
+    dataDir: join(homedir(), '.craft-agent', 'workspaces'),
+    detectDataDirs: findCraftDataDirs,
   },
   {
     name: 'DimAgent',
@@ -226,9 +269,16 @@ export const TOOLS = [
     detectDataDirs: findOpenclawDataDirs,
   },
   {
+    name: 'Oh My Pi',
+    id: 'omp',
+    dataDir: join(homedir(), '.omp', 'agent', 'sessions'),
+    detectDataDirs: findOmpDataDirs,
+  },
+  {
     name: 'pi',
     id: 'pi-coding-agent',
     dataDir: join(homedir(), '.pi', 'agent', 'sessions'),
+    detectDataDirs: findPiDataDirs,
   },
   {
     name: 'Qwen Code',
@@ -260,6 +310,12 @@ export const TOOLS = [
     dataDir: join(homedir(), '.factory', 'sessions'),
   },
   {
+    name: 'DeepSeek Harness',
+    id: 'dsh',
+    dataDir: getDshSessionsDir(),
+    detectDataDirs: findDshDataDirs,
+  },
+  {
     name: 'Antigravity',
     id: 'antigravity',
     dataDir: join(homedir(), '.gemini', 'antigravity'),
@@ -284,7 +340,7 @@ export const TOOLS = [
   {
     name: 'Cline',
     id: 'cline',
-    dataDir: join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev'),
+    dataDir: join(homedir(), '.cline'),
     detectDataDirs: findClineDataDirs,
   },
   {
@@ -292,6 +348,12 @@ export const TOOLS = [
     id: 'roo-code',
     dataDir: join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'rooveterinaryinc.roo-cline'),
     detectDataDirs: findRooCodeDataDirs,
+  },
+  {
+    name: 'WorkBuddy',
+    id: 'workbuddy',
+    dataDir: join(homedir(), '.workbuddy-ai', 'projects'),
+    detectDataDirs: () => findWorkbuddyDataDirs().filter(existsSync),
   },
   {
     name: 'ZCode',

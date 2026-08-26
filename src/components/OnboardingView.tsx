@@ -1,44 +1,29 @@
-// Unconfigured / device-link view — port of PopoverView.unconfiguredView.
+// Unconfigured / first-run view — offline onboarding.
+// No account, no login: "开始使用" runs the first local import and the
+// dashboard appears as soon as the CLI has captured a hostname.
 
 import { useEffect, useRef, useState } from "react";
-import { Info } from "lucide-react";
-import { api, onDeviceLink } from "../lib/api";
+import { ShieldCheck } from "lucide-react";
+import { api, onSyncState } from "../lib/api";
 import { useAppState } from "../state/AppStateContext";
-
-type FlowState = "idle" | "awaitingApproval";
 
 export function OnboardingView() {
   const state = useAppState();
-  const [flowState, setFlowState] = useState<FlowState>("idle");
-  const [pendingUserCode, setPendingUserCode] = useState<string | null>(null);
+  const [initializing, setInitializing] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
-  const flowStateRef = useRef(flowState);
-  flowStateRef.current = flowState;
+  const busyRef = useRef(false);
+  busyRef.current = initializing;
 
   useEffect(() => {
-    const sub = onDeviceLink(async (e) => {
-      if (flowStateRef.current !== "awaitingApproval") return;
-      switch (e.status) {
-        case "success":
-          setPendingUserCode(null);
-          setFlowState("idle");
-          await state.markConfigured();
-          break;
-        case "denied":
-          setSetupError("你拒绝了链接请求。");
-          setPendingUserCode(null);
-          setFlowState("idle");
-          break;
-        case "expired":
-          setSetupError("验证码已过期，请重新登录。");
-          setPendingUserCode(null);
-          setFlowState("idle");
-          break;
-        case "error":
-          setSetupError(`服务端返回未知错误：${e.message}`);
-          setPendingUserCode(null);
-          setFlowState("idle");
-          break;
+    const sub = onSyncState(async (s) => {
+      if (!busyRef.current) return;
+      if (s.status === "success") {
+        setInitializing(false);
+        setSetupError(null);
+        await state.markConfigured();
+      } else if (s.status === "error") {
+        setInitializing(false);
+        setSetupError(s.message ?? "初始化失败");
       }
     });
     return () => {
@@ -47,24 +32,15 @@ export function OnboardingView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startFlow = async () => {
+  const startInitialImport = async () => {
     setSetupError(null);
-    setFlowState("awaitingApproval");
-    setPendingUserCode(null);
+    setInitializing(true);
     try {
-      const { userCode } = await api.startDeviceLink();
-      setPendingUserCode(userCode);
+      await api.triggerSync();
     } catch (err) {
-      setSetupError(`无法连接服务端：${String(err)}`);
-      setFlowState("idle");
+      setInitializing(false);
+      setSetupError(`启动本地统计失败：${String(err)}`);
     }
-  };
-
-  const cancelFlow = () => {
-    void api.cancelDeviceLink();
-    setPendingUserCode(null);
-    setSetupError(null);
-    setFlowState("idle");
   };
 
   return (
@@ -83,47 +59,32 @@ export function OnboardingView() {
       <div className="h-px bg-card-border" />
 
       <div className="flex flex-col gap-4 p-4">
-        {pendingUserCode && (
-          <>
-            <div
-              className="flex items-start gap-2 rounded-card border border-card-border px-2.5 py-2"
-              style={{ background: "#0F0F0F" }}
-            >
-              <Info size={12} color="#808080" className="mt-0.5 shrink-0" />
-              <span className="text-xs" style={{ color: "#B3B3B3" }}>
-                请确认浏览器中显示的验证码与下方一致
-              </span>
-            </div>
+        <div
+          className="flex items-start gap-2 rounded-card border border-card-border px-2.5 py-2"
+          style={{ background: "#0F0F0F" }}
+        >
+          <ShieldCheck size={12} color="#808080" className="mt-0.5 shrink-0" />
+          <span className="text-xs" style={{ color: "#B3B3B3" }}>
+            完全本地统计：数据保存在本机（~/.vibe-usage），无需账号，不上传任何内容
+          </span>
+        </div>
 
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[10px] font-medium uppercase text-t-muted">验证码</span>
-              <span className="font-mono text-[22px] font-semibold tracking-[3px] text-white">
-                {pendingUserCode}
-              </span>
-            </div>
-          </>
-        )}
+        <div className="flex flex-col gap-1 text-xs" style={{ color: "#8C8C8C" }}>
+          <span>· 自动检测已安装的 AI 编程工具（Claude Code、Codex、Grok 等）</span>
+          <span>· 从本地日志统计 Token 用量与费用（本地价格表估算）</span>
+          <span>· 后台每 30 分钟自动更新</span>
+        </div>
 
         {setupError && <div className="text-xs text-red-500">{setupError}</div>}
 
         <button
           className="flex w-full items-center justify-center gap-1.5 rounded-md bg-white py-2 text-[13px] font-medium text-black disabled:opacity-80"
-          disabled={flowState === "awaitingApproval"}
-          onClick={() => void startFlow()}
+          disabled={initializing}
+          onClick={() => void startInitialImport()}
         >
-          {flowState === "awaitingApproval" && <div className="spinner spinner-dark h-3 w-3" />}
-          {flowState === "awaitingApproval" ? "等待浏览器确认…" : "登录并链接数据"}
+          {initializing && <div className="spinner spinner-dark h-3 w-3" />}
+          {initializing ? "正在统计本地数据…" : "开始使用"}
         </button>
-
-        {flowState === "awaitingApproval" && (
-          <button
-            className="w-full py-1.5 text-xs font-medium"
-            style={{ color: "#999999" }}
-            onClick={cancelFlow}
-          >
-            取消，重新开始
-          </button>
-        )}
       </div>
     </div>
   );
