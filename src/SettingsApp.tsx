@@ -18,6 +18,15 @@ export function SettingsApp() {
   const [pricingBusy, setPricingBusy] = useState(false);
   const [pricingMessage, setPricingMessage] = useState<string | null>(null);
   const [pricingMessageIsError, setPricingMessageIsError] = useState(false);
+  const [priceEditor, setPriceEditor] = useState<{
+    origModel: string | null;
+    model: string;
+    input: string;
+    output: string;
+    cacheRead: string;
+  } | null>(null);
+  const [priceEditError, setPriceEditError] = useState<string | null>(null);
+  const [priceBusy, setPriceBusy] = useState(false);
 
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -126,6 +135,66 @@ export function SettingsApp() {
     }
   };
 
+  const saveCustomPrice = async () => {
+    if (!priceEditor) return;
+    setPriceEditError(null);
+    const model = priceEditor.model.trim();
+    if (!model) {
+      setPriceEditError("模型名不能为空");
+      return;
+    }
+    const parseField = (raw: string, label: string): number | null => {
+      const t = raw.trim();
+      if (!t) return null;
+      const n = Number(t);
+      if (!Number.isFinite(n) || n < 0) throw new Error(`${label}价格无效: ${t}`);
+      return n;
+    };
+    let input: number | null;
+    let output: number | null;
+    let cacheRead: number | null;
+    try {
+      input = parseField(priceEditor.input, "输入");
+      output = parseField(priceEditor.output, "输出");
+      cacheRead = parseField(priceEditor.cacheRead, "缓存读");
+    } catch (err) {
+      setPriceEditError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (input === null && output === null && cacheRead === null) {
+      setPriceEditError("至少填写一个价格");
+      return;
+    }
+    setPriceBusy(true);
+    try {
+      const next = await api.setCustomPrice(model, input, output, cacheRead);
+      setPricing(next);
+      setPriceEditor(null);
+      setPricingMessageIsError(false);
+      setPricingMessage(`已保存 ${model} 的自定义价格`);
+    } catch (err) {
+      setPriceEditError(String(err));
+    } finally {
+      setPriceBusy(false);
+    }
+  };
+
+  const removeCustomPrice = async (model: string) => {
+    setPricingMessage(null);
+    setPricingBusy(true);
+    try {
+      const next = await api.removeCustomPrice(model);
+      setPricing(next);
+      setPricingMessageIsError(false);
+      setPricingMessage(`已删除 ${model} 的自定义价格`);
+    } catch (err) {
+      setPricingMessageIsError(true);
+      setPricingMessage(String(err));
+    } finally {
+      setPricingBusy(false);
+    }
+  };
+
   return (
     <div
       className="h-screen overflow-hidden font-sans text-[13px]"
@@ -208,6 +277,118 @@ export function SettingsApp() {
               </span>
             </Row>
           )}
+
+          {/* 自定义价格 */}
+          <Row label="自定义价格">
+            <div className="flex items-center gap-2">
+              {pricing && pricing.custom.length > 0 && (
+                <span className="text-xs" style={{ color: "#9E9E9E" }}>
+                  {pricing.custom.length} 项
+                </span>
+              )}
+              <SmallButton
+                onClick={() =>
+                  setPriceEditor({ origModel: null, model: "", input: "", output: "", cacheRead: "" })
+                }
+              >
+                添加
+              </SmallButton>
+            </div>
+          </Row>
+          {pricing?.custom.map((entry) => (
+            <div
+              key={entry.model}
+              className="flex min-h-[38px] items-center justify-between gap-3 px-3 py-1.5"
+              style={{ borderColor: "#3A3A3C" }}
+            >
+              <span
+                className="min-w-0 truncate font-mono text-xs"
+                style={{ color: "#E8E8E8" }}
+                title={entry.model}
+              >
+                {entry.model}
+              </span>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <span
+                  className="text-xs"
+                  style={{ color: "#9E9E9E" }}
+                  title={`输入 ${fmtPerM(entry.inputPerM)} · 输出 ${fmtPerM(entry.outputPerM)} · 缓存读 ${fmtPerM(entry.cacheReadPerM)} 美元/百万 tokens`}
+                >
+                  {fmtPerM(entry.inputPerM)} / {fmtPerM(entry.outputPerM)}
+                </span>
+                <SmallButton
+                  onClick={() =>
+                    setPriceEditor({
+                      origModel: entry.model,
+                      model: entry.model,
+                      input: entry.inputPerM?.toString() ?? "",
+                      output: entry.outputPerM?.toString() ?? "",
+                      cacheRead: entry.cacheReadPerM?.toString() ?? "",
+                    })
+                  }
+                >
+                  编辑
+                </SmallButton>
+                <SmallButton onClick={() => void removeCustomPrice(entry.model)}>删除</SmallButton>
+              </div>
+            </div>
+          ))}
+          {priceEditor && (
+            <div className="flex flex-col gap-2 px-3 py-2.5" style={{ background: "#1C1C1E" }}>
+              <input
+                value={priceEditor.model}
+                disabled={!!priceEditor.origModel}
+                placeholder="模型名，如 glm-5.3"
+                onChange={(e) => setPriceEditor({ ...priceEditor, model: e.target.value })}
+                className="rounded-md px-2 py-1 font-mono text-xs outline-none"
+                style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
+              />
+              <div className="grid grid-cols-3 gap-2">
+                {(
+                  [
+                    ["输入", "input"],
+                    ["输出", "output"],
+                    ["缓存读", "cacheRead"],
+                  ] as const
+                ).map(([label, field]) => (
+                  <label key={field} className="flex flex-col gap-1">
+                    <span className="text-[10px]" style={{ color: "#8C8C8C" }}>
+                      {label} $/M
+                    </span>
+                    <input
+                      value={priceEditor[field]}
+                      placeholder="—"
+                      onChange={(e) => setPriceEditor({ ...priceEditor, [field]: e.target.value })}
+                      className="rounded-md px-2 py-1 text-xs outline-none"
+                      style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
+                    />
+                  </label>
+                ))}
+              </div>
+              <span className="text-[10px]" style={{ color: "#737373" }}>
+                单位: 美元/百万 tokens。留空的字段沿用价格表原值（新模型则视为 0）。
+              </span>
+              {priceEditError && <span className="text-xs text-red-400">{priceEditError}</span>}
+              <div className="flex justify-end gap-2">
+                <SmallButton
+                  onClick={() => {
+                    setPriceEditor(null);
+                    setPriceEditError(null);
+                  }}
+                >
+                  取消
+                </SmallButton>
+                <button
+                  disabled={priceBusy}
+                  onClick={() => void saveCustomPrice()}
+                  className="rounded-md bg-white px-3 py-1 text-xs font-medium text-black disabled:opacity-50"
+                >
+                  {priceBusy ? "保存中…" : "保存"}
+                </button>
+              </div>
+            </div>
+          )}
+
           <Row label="网络刷新">
             <div className="flex items-center gap-2">
               {pricingMessage && (
@@ -232,8 +413,23 @@ export function SettingsApp() {
             </div>
           )}
           {pricing && pricing.coverage.unpricedModels.length > 0 && (
-            <div className="break-words px-3 py-2 text-[11px]" style={{ color: "#737373" }}>
-              无价格数据（不计入费用）: {unpricedSummary(pricing)}
+            <div
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-[11px]"
+              style={{ color: "#737373" }}
+            >
+              <span>无价格数据（不计入费用），点击设置:</span>
+              {pricing.coverage.unpricedModels.map((m) => (
+                <button
+                  key={m}
+                  className="font-mono underline"
+                  style={{ color: "#8C8C8C" }}
+                  onClick={() =>
+                    setPriceEditor({ origModel: null, model: m, input: "", output: "", cacheRead: "" })
+                  }
+                >
+                  {m}
+                </button>
+              ))}
             </div>
           )}
         </Section>
@@ -423,9 +619,6 @@ function pricingSourceLabel(source: PricingStatus["source"]): string {
   }
 }
 
-function unpricedSummary(pricing: PricingStatus): string {
-  const models = pricing.coverage.unpricedModels;
-  const shown = models.slice(0, 6);
-  const extra = models.length - shown.length;
-  return shown.join(", ") + (extra > 0 ? ` 等 ${extra} 个` : "");
+function fmtPerM(v?: number | null): string {
+  return v == null ? "—" : String(v);
 }

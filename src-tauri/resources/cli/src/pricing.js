@@ -15,10 +15,12 @@ const snapshot = JSON.parse(
 //   1. bundled snapshot  src/prices-snapshot.json (works with zero network)
 //   2. cached refresh    ~/.vibe-usage/prices.json
 //   3. live refresh      best-effort, at most once per week, silent on failure
+//   4. custom overrides  ~/.vibe-usage/prices-custom.json (user-managed;
+//                        partial entries merge per field with the layers below)
 //
 // Set VIBE_USAGE_OFFLINE=1 to never touch the network (cache/snapshot only).
 // VIBE_USAGE_PRICES_URL overrides the table URL (test hook); the store-dir
-// override VIBE_USAGE_STORE_DIR also relocates the cache file.
+// override VIBE_USAGE_STORE_DIR also relocates the cache/custom files.
 
 const DEFAULT_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json';
 const REFRESH_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -26,6 +28,13 @@ const FETCH_TIMEOUT_MS = 10_000;
 
 const STORE_DIR = process.env.VIBE_USAGE_STORE_DIR?.trim() || join(homedir(), '.vibe-usage');
 const CACHE_FILE = join(STORE_DIR, 'prices.json');
+const CUSTOM_FILE = join(STORE_DIR, 'prices-custom.json');
+
+const CUSTOM_FIELDS = [
+  'input_cost_per_token',
+  'output_cost_per_token',
+  'cache_read_input_token_cost',
+];
 
 export function getSnapshotTable() {
   return {
@@ -97,30 +106,76 @@ export async function tryRefreshPriceTable() {
 /**
  * Resolve the price table, refreshing the cache when stale (best-effort).
  * Never throws: network failure degrades to cache, then to the snapshot.
+ * Custom overrides are layered on top of whatever resolves.
  */
 export async function getPriceTable({ force = false } = {}) {
   const cache = readCache();
   const age = cache ? Date.now() - Date.parse(cache.fetchedAt) : Infinity;
   if (!force && cache && Number.isFinite(age) && age < REFRESH_INTERVAL_MS) {
-    return cache;
+    return withCustomPrices(cache);
   }
 
   if (process.env.VIBE_USAGE_OFFLINE === '1') {
-    return cache ?? getSnapshotTable();
+    return withCustomPrices(cache ?? getSnapshotTable());
   }
 
   try {
-    return await tryRefreshPriceTable();
+    return withCustomPrices(await tryRefreshPriceTable());
   } catch {
-    return cache ?? getSnapshotTable();
+    return withCustomPrices(cache ?? getSnapshotTable());
   }
+}
+
+// ── Custom price overrides ──────────────────────────────────────────────
+
+// User-defined overrides, keyed by lowercase model name. Values use the same
+// per-token schema as the price table. A corrupt file must never break cost
+// estimation — it is ignored.
+export function loadCustomPrices() {
+  try {
+    if (!existsSync(CUSTOM_FILE)) return {};
+    const parsed = JSON.parse(readFileSync(CUSTOM_FILE, 'utf-8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!value || typeof value !== 'object') continue;
+      const entry = {};
+      for (const field of CUSTOM_FIELDS) {
+        const n = Number(value[field]);
+        if (Number.isFinite(n) && n >= 0) entry[field] = n;
+      }
+      if (Object.keys(entry).length > 0) out[String(key).trim().toLowerCase()] = entry;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function saveCustomPrices(custom) {
+  mkdirSync(STORE_DIR, { recursive: true });
+  writeFileSync(CUSTOM_FILE, JSON.stringify(custom, null, 2) + '\n', 'utf-8');
+}
+
+// Layer custom overrides over a resolved table. Partial entries merge per
+// field, so overriding just an output price keeps the base input/cache rates.
+function withCustomPrices(table) {
+  const custom = loadCustomPrices();
+  if (Object.keys(custom).length === 0) return table;
+  const models = { ...table.models };
+  for (const [name, entry] of Object.entries(custom)) {
+    models[name] = { ...models[name], ...entry };
+  }
+  return { ...table, models };
 }
 
 // Resolve the price table plus a machine-readable status describing which
 // layer is active and — with `refresh` — why a forced attempt did or did not
 // succeed. `getPriceTable` stays silent by design; this is the reporting
 // surface for `vibe-usage prices` and the desktop settings view.
-export async function loadPricing({ refresh = false } = {}) {
+// `local: true` skips the stale-cache refresh attempt (used right after
+// set/unset so saving a price never waits on the network).
+export async function loadPricing({ refresh = false, local = false } = {}) {
   const offline = process.env.VIBE_USAGE_OFFLINE === '1';
   const refreshState = { attempted: false, ok: null, error: null };
 
@@ -141,18 +196,23 @@ export async function loadPricing({ refresh = false } = {}) {
         table = readCache() ?? getSnapshotTable();
       }
     }
+  } else if (local) {
+    table = readCache() ?? getSnapshotTable();
   } else {
     table = await getPriceTable();
   }
 
+  const custom = loadCustomPrices();
+  const effective = withCustomPrices(table);
   const status = {
     source: table.source,
     fetchedAt: table.fetchedAt,
-    modelCount: Object.keys(table.models).length,
+    modelCount: Object.keys(effective.models).length,
     offline,
     refresh: refreshState,
+    customCount: Object.keys(custom).length,
   };
-  return { status, table };
+  return { status, table: effective, custom };
 }
 
 export async function getPricingStatus(opts = {}) {

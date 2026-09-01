@@ -58,6 +58,38 @@ pub async fn fetch_pricing_status(app: &AppHandle, force: bool) -> Result<Value,
     run_cli_json(app, &args, "查询价格表失败").await
 }
 
+/// Set (add or partially override) a custom model price. Values are USD per
+/// million tokens. Returns the updated pricing status JSON.
+pub async fn set_custom_price(
+    app: &AppHandle,
+    model: &str,
+    input_per_m: Option<f64>,
+    output_per_m: Option<f64>,
+    cache_read_per_m: Option<f64>,
+) -> Result<Value, String> {
+    let mut args = vec!["prices".to_string(), "set".to_string(), model.to_string()];
+    for (flag, value) in [
+        ("--input", input_per_m),
+        ("--output", output_per_m),
+        ("--cache-read", cache_read_per_m),
+    ] {
+        if let Some(v) = value {
+            if !v.is_finite() || v < 0.0 {
+                return Err("价格必须为非负数字（美元/百万 tokens）".into());
+            }
+            args.push(flag.to_string());
+            args.push(format!("{v}"));
+        }
+    }
+    run_cli_json(app, &args, "设置自定义价格失败").await
+}
+
+/// Remove a custom model price. Returns the updated pricing status JSON.
+pub async fn unset_custom_price(app: &AppHandle, model: &str) -> Result<Value, String> {
+    let args = vec!["prices".to_string(), "unset".to_string(), model.to_string()];
+    run_cli_json(app, &args, "删除自定义价格失败").await
+}
+
 async fn run_cli_json(app: &AppHandle, args: &[String], context: &str) -> Result<Value, String> {
     let cli = crate::services::sync_engine::cli_entry(app)
         .ok_or_else(|| "未找到内置 CLI 资源".to_string())?;

@@ -69,6 +69,8 @@ pub fn run() {
             commands::get_app_status,
             commands::fetch_usage,
             commands::get_pricing_status,
+            commands::set_custom_price,
+            commands::remove_custom_price,
             commands::trigger_sync,
             commands::get_sync_state,
             commands::get_rate_limits,

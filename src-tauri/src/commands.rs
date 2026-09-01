@@ -53,6 +53,35 @@ pub async fn get_pricing_status(app: AppHandle, force: bool) -> Result<Value, St
     usage_reader::fetch_pricing_status(&app, force).await
 }
 
+// -- Custom prices ---------------------------------------------------------------
+
+/// Add or partially override a custom model price (USD per million tokens).
+/// Returns the updated pricing status.
+#[tauri::command]
+pub async fn set_custom_price(
+    app: AppHandle,
+    model: String,
+    input_per_m: Option<f64>,
+    output_per_m: Option<f64>,
+    cache_read_per_m: Option<f64>,
+) -> Result<Value, String> {
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("模型名不能为空".into());
+    }
+    usage_reader::set_custom_price(&app, &model, input_per_m, output_per_m, cache_read_per_m).await
+}
+
+/// Remove a custom model price. Returns the updated pricing status.
+#[tauri::command]
+pub async fn remove_custom_price(app: AppHandle, model: String) -> Result<Value, String> {
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("模型名不能为空".into());
+    }
+    usage_reader::unset_custom_price(&app, &model).await
+}
+
 // -- Sync ---------------------------------------------------------------------
 
 #[tauri::command]

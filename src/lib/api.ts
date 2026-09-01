@@ -23,6 +23,24 @@ export const api = {
    *  outcome (ok or error) is reported instead of silently falling back. */
   getPricingStatus: (force: boolean) => invoke<PricingStatus>("get_pricing_status", { force }),
 
+  /** Add or partially override a custom model price (USD per million
+   *  tokens). Returns the updated pricing status. */
+  setCustomPrice: (
+    model: string,
+    inputPerM?: number | null,
+    outputPerM?: number | null,
+    cacheReadPerM?: number | null,
+  ) =>
+    invoke<PricingStatus>("set_custom_price", {
+      model,
+      inputPerM: inputPerM ?? null,
+      outputPerM: outputPerM ?? null,
+      cacheReadPerM: cacheReadPerM ?? null,
+    }),
+
+  /** Remove a custom model price. Returns the updated pricing status. */
+  removeCustomPrice: (model: string) => invoke<PricingStatus>("remove_custom_price", { model }),
+
   // Sync ---------------------------------------------------------------------
   triggerSync: () => invoke<void>("trigger_sync"),
   getSyncState: () => invoke<SyncState>("get_sync_state"),

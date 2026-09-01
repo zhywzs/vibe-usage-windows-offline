@@ -238,12 +238,22 @@ export interface PricingRefreshState {
   error: string | null;
 }
 
+/** A user-defined custom price override, in USD per million tokens. */
+export interface CustomPriceEntry {
+  model: string;
+  inputPerM?: number | null;
+  outputPerM?: number | null;
+  cacheReadPerM?: number | null;
+}
+
 export interface PricingStatus {
   source: "snapshot" | "cache" | "refreshed";
   fetchedAt: string;
   modelCount: number;
   offline: boolean;
   refresh: PricingRefreshState;
+  customCount: number;
+  custom: CustomPriceEntry[];
   coverage: {
     usedModelCount: number;
     pricedModels: string[];
