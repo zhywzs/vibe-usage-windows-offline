@@ -95,6 +95,13 @@ pub async fn remove_custom_price(app: AppHandle, model: String) -> Result<Value,
     usage_reader::unset_custom_price(&app, &model).await
 }
 
+/// Pull community model prices (merges into custom prices; local entries
+/// win unless `force`). Returns the updated pricing status.
+#[tauri::command]
+pub async fn pull_community_prices(app: AppHandle, force: bool) -> Result<Value, String> {
+    usage_reader::pull_community_prices(&app, force).await
+}
+
 /// Set the display currency (summary/dashboard rendering). Returns the
 /// updated pricing status.
 #[tauri::command]

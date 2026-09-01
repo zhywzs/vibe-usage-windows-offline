@@ -250,6 +250,28 @@ export function SettingsApp() {
     }
   };
 
+  const pullCommunityPrices = async () => {
+    setPricingMessage(null);
+    setPricingBusy(true);
+    try {
+      const next = await api.pullCommunityPrices(false);
+      setPricing(next);
+      const p = next.pull;
+      if (p) {
+        setPricingMessageIsError(false);
+        const parts = [`新增 ${p.added}`];
+        if (p.skipped > 0) parts.push(`跳过 ${p.skipped}（本地已设置）`);
+        if (p.overwritten > 0) parts.push(`覆盖 ${p.overwritten}`);
+        setPricingMessage(`社区价格已导入：${parts.join(" · ")}，共 ${p.total} 项`);
+      }
+    } catch (err) {
+      setPricingMessageIsError(true);
+      setPricingMessage(`导入失败: ${String(err)}`);
+    } finally {
+      setPricingBusy(false);
+    }
+  };
+
   return (
     <div
       className="h-screen overflow-hidden font-sans text-[13px]"
@@ -341,6 +363,13 @@ export function SettingsApp() {
                   {pricing.custom.length} 项
                 </span>
               )}
+              <SmallButton
+                disabled={pricingBusy || !!pricing?.offline}
+                title="从本项目的 GitHub Release 拉取社区维护的模型价格（中文区常用模型），合并到本地——已设置的价格不会被覆盖"
+                onClick={() => void pullCommunityPrices()}
+              >
+                {pricingBusy ? "导入中…" : "导入社区价格"}
+              </SmallButton>
               <SmallButton
                 onClick={() =>
                   setPriceEditor({
@@ -764,15 +793,18 @@ function SmallButton({
   children,
   disabled,
   onClick,
+  title,
 }: {
   children: React.ReactNode;
   disabled?: boolean;
   onClick: () => void;
+  title?: string;
 }) {
   return (
     <button
       disabled={disabled}
       onClick={onClick}
+      title={title}
       className="rounded-md px-2.5 py-1 text-xs disabled:opacity-50"
       style={{ background: "#48484A", color: "#E8E8E8" }}
     >

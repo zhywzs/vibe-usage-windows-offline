@@ -48,6 +48,10 @@ export const api = {
   /** Remove a custom model price. Returns the updated pricing status. */
   removeCustomPrice: (model: string) => invoke<PricingStatus>("remove_custom_price", { model }),
 
+  /** Pull community model prices from the latest GitHub Release (merges
+   *  into custom prices; local entries win unless `force`). */
+  pullCommunityPrices: (force: boolean) => invoke<PricingStatus>("pull_community_prices", { force }),
+
   /** Set the display currency. Returns the updated pricing status. */
   setDisplayCurrency: (currency: string) =>
     invoke<PricingStatus>("set_display_currency", { currency }),

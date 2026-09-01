@@ -1,7 +1,7 @@
 import { loadStore } from './store.js';
 import {
   loadPricing, lookupPrice, readCustomFileDirect, saveCustomFile, currencyRate,
-  currencySymbol, DEFAULT_RATES,
+  currencySymbol, DEFAULT_RATES, fetchCommunityPrices, mergeCommunityPrices,
 } from './pricing.js';
 
 // Price-table status + user-defined model prices.
@@ -13,6 +13,7 @@ import {
 //   vibe-usage prices unset <model>
 //   vibe-usage prices currency [CODE]                 # show/set the display currency
 //   vibe-usage prices rate [<CODE> <perUSD>]          # show/set exchange rates
+//   vibe-usage prices pull [--force] [--url <url>]    # fetch community prices and merge
 //
 // Custom prices live in ~/.vibe-usage/prices-custom.json. Units are
 // per-million tokens in the entry's currency; `--avg` applies one price to
@@ -20,6 +21,12 @@ import {
 // cost math stays in USD via per-currency rates (CNY has a built-in default;
 // set others with `prices rate`). The display currency drives summary/usage
 // rendering and the desktop app.
+//
+// `prices pull` downloads the community price file from this project's
+// latest GitHub Release (stable /releases/latest/download/ URL — the same
+// acquisition pattern the desktop app's updater uses for its manifest) and
+// merges it into the local custom file: entries you set yourself win;
+// --force lets the remote values overwrite them.
 
 const DETAILED_FLAGS = [
   ['--input', 'input_per_m'],
@@ -35,8 +42,9 @@ export async function runPrices(args = []) {
   if (sub === 'unset') return runUnset(args.slice(1));
   if (sub === 'currency') return runCurrency(args.slice(1));
   if (sub === 'rate') return runRate(args.slice(1));
+  if (sub === 'pull') return runPull(args.slice(1));
   if (sub !== undefined && !sub.startsWith('--')) {
-    throw new Error(`Unknown prices subcommand: ${sub}（可用: set / unset / currency / rate）`);
+    throw new Error(`Unknown prices subcommand: ${sub}（可用: set / unset / currency / rate / pull）`);
   }
   await emitStatus({ refresh: args.includes('--refresh') });
 }
@@ -184,6 +192,44 @@ async function runRate(args) {
   file.rates[code] = value;
   saveCustomFile(file);
   await emitStatus({ local: true });
+}
+
+async function runPull(args) {
+  const force = args.includes('--force');
+  const url = optionValue(args, '--url');
+  const positional = args.filter((a) => a !== '--force' && a !== '--url' && a !== url);
+  if (positional.length > 0) {
+    throw new Error(`Unexpected argument: ${positional[0]}`);
+  }
+
+  const community = await fetchCommunityPrices({ url });
+  const merge = mergeCommunityPrices(community, { force });
+  const { status, table } = await loadPricing({ local: true });
+
+  const usedModels = new Set();
+  for (const entry of Object.values(loadStore().buckets)) {
+    const model = entry.data?.model;
+    if (model) usedModels.add(model);
+  }
+  const pricedModels = [];
+  const unpricedModels = [];
+  for (const model of usedModels) {
+    (lookupPrice(table.models, model) ? pricedModels : unpricedModels).push(model);
+  }
+  pricedModels.sort();
+  unpricedModels.sort();
+
+  const rawFile = readCustomFileDirect();
+  process.stdout.write(JSON.stringify({
+    ...status,
+    pull: { ...merge, forced: force, url: url ?? null },
+    custom: formatCustom(rawFile),
+    coverage: {
+      usedModelCount: usedModels.size,
+      pricedModels,
+      unpricedModels,
+    },
+  }) + '\n');
 }
 
 async function emitStatus({ refresh = false, local = false } = {}) {

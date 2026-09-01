@@ -108,6 +108,17 @@ pub async fn unset_custom_price(app: &AppHandle, model: &str) -> Result<Value, S
     run_cli_json(app, &args, "删除自定义价格失败").await
 }
 
+/// Pull community model prices from the project's latest GitHub Release
+/// (`prices pull [--force]`). Local entries win unless `force`. Returns the
+/// updated pricing status JSON (including the pull merge counts).
+pub async fn pull_community_prices(app: &AppHandle, force: bool) -> Result<Value, String> {
+    let mut args = vec!["prices".to_string(), "pull".to_string()];
+    if force {
+        args.push("--force".to_string());
+    }
+    run_cli_json(app, &args, "拉取社区价格失败").await
+}
+
 /// Show/set the display currency (`prices currency [CODE]`).
 pub async fn set_display_currency(app: &AppHandle, code: &str) -> Result<Value, String> {
     let args = vec!["prices".to_string(), "currency".to_string(), code.to_string()];

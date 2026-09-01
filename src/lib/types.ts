@@ -271,6 +271,14 @@ export interface PricingStatus {
   currency: CurrencyInfo;
   /** code → per-USD rate, merged defaults + user overrides. */
   rates: Record<string, number>;
+  /** Present after pull_community_prices: merge counts. */
+  pull?: {
+    added: number;
+    skipped: number;
+    overwritten: number;
+    total: number;
+    forced: boolean;
+  } | null;
   coverage: {
     usedModelCount: number;
     pricedModels: string[];

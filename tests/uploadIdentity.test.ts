@@ -70,9 +70,15 @@ test("custom model prices flow through the CLI bridge and the settings UI", () =
   const settings = readFileSync("src/SettingsApp.tsx", "utf8");
   expect(settings).toContain("setCustomPrice");
   expect(settings).toContain("removeCustomPrice");
+  expect(settings).toContain("pullCommunityPrices");
+  expect(settings).toContain("导入社区价格");
   expect(settings).toContain("setDisplayCurrency");
   expect(settings).toContain("显示货币");
   const api = readFileSync("src/lib/api.ts", "utf8");
   expect(api).toContain("set_custom_price");
+  expect(api).toContain("pull_community_prices");
   expect(api).toContain("set_display_currency");
+  // The vendored CLI ships the community-price source the button pulls from.
+  const community = readFileSync("src-tauri/resources/cli/src/pricing.js", "utf8");
+  expect(community).toContain("releases/latest/download/prices-community.json");
 });

@@ -25,6 +25,11 @@ const snapshot = JSON.parse(
 const DEFAULT_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json';
 const REFRESH_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10_000;
+// Community-contributed custom prices (bundled into this repo's GitHub
+// Release). Same acquisition pattern as the desktop updater's manifest:
+// a stable /releases/latest/download/<file> URL that always resolves to
+// the newest release asset.
+const DEFAULT_COMMUNITY_URL = 'https://github.com/zhywzs/vibe-usage-offline/releases/latest/download/prices-community.json';
 
 const STORE_DIR = process.env.VIBE_USAGE_STORE_DIR?.trim() || join(homedir(), '.vibe-usage');
 const CACHE_FILE = join(STORE_DIR, 'prices.json');
@@ -199,6 +204,50 @@ export function currencyRate(code, file = readCustomFile()) {
 export function saveCustomFile(file) {
   mkdirSync(STORE_DIR, { recursive: true });
   writeFileSync(CUSTOM_FILE, JSON.stringify(file, null, 2) + '\n', 'utf-8');
+}
+
+// Fetch a community price file ({ models: {...} } in the same entry schema
+// as prices-custom.json). Throws on network/shape failure so `prices pull`
+// can surface the reason; offline mode is rejected up front.
+export async function fetchCommunityPrices({ url } = {}) {
+  if (process.env.VIBE_USAGE_OFFLINE === '1') {
+    throw new Error('offline mode (VIBE_USAGE_OFFLINE=1)');
+  }
+  const target = url || process.env.VIBE_USAGE_COMMUNITY_PRICES_URL?.trim() || DEFAULT_COMMUNITY_URL;
+  const res = await fetch(target, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const parsed = await res.json();
+  if (!parsed || typeof parsed !== 'object' || !parsed.models || typeof parsed.models !== 'object') {
+    throw new Error('文件格式无效（缺少 models 字段）');
+  }
+  return parsed;
+}
+
+// Merge community entries into the local custom file. Local entries win
+// unless `force` — the user hand-tuned prices are more authoritative than
+// the community defaults. Returns merge counts for reporting.
+export function mergeCommunityPrices(community, { force = false } = {}) {
+  const file = readCustomFile();
+  let added = 0;
+  let skipped = 0;
+  let overwritten = 0;
+  for (const [rawName, entry] of Object.entries(community.models)) {
+    const name = String(rawName).trim().toLowerCase();
+    if (!name || !entry || typeof entry !== 'object') continue;
+    const clean = { ...entry };
+    delete clean._comment;
+    if (file.models[name] === undefined) {
+      added++;
+    } else if (force) {
+      overwritten++;
+    } else {
+      skipped++;
+      continue;
+    }
+    file.models[name] = clean;
+  }
+  saveCustomFile(file);
+  return { added, skipped, overwritten, total: Object.keys(file.models).length };
 }
 
 // Expand custom entries into USD per-token prices layered over the table.

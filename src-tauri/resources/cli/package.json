@@ -1,6 +1,6 @@
 {
   "name": "@vibe-cafe/vibe-usage",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Offline tracker for AI coding tool token usage — data never leaves your machine (fork of vibe-cafe/vibe-usage)",
   "type": "module",
   "scripts": {

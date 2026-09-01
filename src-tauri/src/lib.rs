@@ -71,6 +71,7 @@ pub fn run() {
             commands::get_pricing_status,
             commands::set_custom_price,
             commands::remove_custom_price,
+            commands::pull_community_prices,
             commands::set_display_currency,
             commands::set_currency_rate,
             commands::trigger_sync,
