@@ -1,5 +1,5 @@
 import { loadStore } from './store.js';
-import { getPriceTable, estimateBucketCost } from './pricing.js';
+import { getPriceTable, estimateBucketCost, getPricingMeta } from './pricing.js';
 
 // Machine-readable local usage query — the offline replacement for the
 // vibecafe.ai GET /api/usage endpoint. Emits JSON to stdout in the exact
@@ -17,8 +17,10 @@ import { getPriceTable, estimateBucketCost } from './pricing.js';
 
 export async function runUsage(args = []) {
   const range = parseRange(args);
+  const currencyArg = optionValue(args, 'currency');
   const store = loadStore();
   const prices = await getPriceTable();
+  const meta = getPricingMeta({ currency: currencyArg });
   const hasPricing = Object.keys(prices.models).length > 0;
 
   const cutoff = range.from ?? new Date(0).toISOString();
@@ -46,6 +48,9 @@ export async function runUsage(args = []) {
     buckets,
     sessions,
     hasAnyData: Object.keys(store.buckets).length > 0,
+    // Display-currency metadata: estimatedCost stays USD; consumers convert
+    // with rate for display (symbol is a prefix string).
+    currency: { code: meta.code, rate: meta.rate, symbol: meta.symbol },
   };
   process.stdout.write(JSON.stringify(payload) + '\n');
 }

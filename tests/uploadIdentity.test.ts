@@ -50,21 +50,29 @@ test("pricing status is served by the vendored CLI with refresh reporting", () =
 });
 
 test("custom model prices flow through the CLI bridge and the settings UI", () => {
-  const commands = readFileSync("src-tauri/src/commands.rs", "utf-8");
+  const commands = readFileSync("src-tauri/src/commands.rs", "utf8");
   expect(commands).toContain("set_custom_price");
   expect(commands).toContain("remove_custom_price");
-  const reader = readFileSync("src-tauri/src/services/usage_reader.rs", "utf-8");
+  expect(commands).toContain("set_display_currency");
+  expect(commands).toContain("set_currency_rate");
+  const reader = readFileSync("src-tauri/src/services/usage_reader.rs", "utf8");
   expect(reader).toContain('"set".to_string()');
   expect(reader).toContain('"unset".to_string()');
+  expect(reader).toContain('"currency".to_string()');
+  expect(reader).toContain('"rate".to_string()');
   // The vendored CLI implements the custom-price store behind those args.
-  const cliPricing = readFileSync("src-tauri/resources/cli/src/pricing.js", "utf-8");
+  const cliPricing = readFileSync("src-tauri/resources/cli/src/pricing.js", "utf8");
   expect(cliPricing).toContain("prices-custom.json");
-  const cliPrices = readFileSync("src-tauri/resources/cli/src/prices.js", "utf-8");
-  expect(cliPrices).toContain("parsePerMillion");
-  const settings = readFileSync("src/SettingsApp.tsx", "utf-8");
+  const cliPrices = readFileSync("src-tauri/resources/cli/src/prices.js", "utf8");
+  expect(cliPrices).toContain("parsePrice");
+  expect(cliPrices).toContain("--avg");
+  expect(cliPrices).toContain("--currency");
+  const settings = readFileSync("src/SettingsApp.tsx", "utf8");
   expect(settings).toContain("setCustomPrice");
   expect(settings).toContain("removeCustomPrice");
-  const api = readFileSync("src/lib/api.ts", "utf-8");
+  expect(settings).toContain("setDisplayCurrency");
+  expect(settings).toContain("显示货币");
+  const api = readFileSync("src/lib/api.ts", "utf8");
   expect(api).toContain("set_custom_price");
-  expect(api).toContain("remove_custom_price");
+  expect(api).toContain("set_display_currency");
 });

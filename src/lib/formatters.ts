@@ -26,6 +26,19 @@ export function formatCnyCost(cost: number): string {
   return `￥${cny.toFixed(2)}`;
 }
 
+/** Format an estimated USD cost in the active display currency
+ *  (from the offline CLI's pricing configuration). */
+export function formatCostIn(
+  costUsd: number,
+  currency: { code: string; rate: number; symbol: string },
+): string {
+  if (currency.code === "USD" || !currency.rate) return formatCost(costUsd);
+  const v = costUsd * currency.rate;
+  if (v === 0) return `${currency.symbol}0.00`;
+  if (v < 0.01) return `${currency.symbol}${v.toFixed(4)}`;
+  return `${currency.symbol}${v.toFixed(2)}`;
+}
+
 const CHINESE_TOKEN_UNITS = [
   { factor: 1, suffix: "" },
   { factor: 1_000, suffix: "千" },

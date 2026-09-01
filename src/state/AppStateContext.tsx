@@ -18,6 +18,7 @@ import {
   bucketDate,
   ChartMode,
   computedTotal,
+  CurrencyInfo,
   emptyFilters,
   FilterState,
   fixedDayCount,
@@ -41,6 +42,8 @@ interface AppStateValue {
   buckets: UsageBucket[];
   sessions: UsageSession[];
   hasAnyData: boolean;
+  /** Display currency from the offline CLI (cost math stays USD). */
+  currency: CurrencyInfo;
   isLoadingData: boolean;
   hasLoadedUsageData: boolean;
   isInitialDataLoad: boolean;
@@ -101,6 +104,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [buckets, setBuckets] = useState<UsageBucket[]>([]);
   const [sessions, setSessions] = useState<UsageSession[]>([]);
   const [hasAnyData, setHasAnyData] = useState(false);
+  const [currency, setCurrency] = useState<CurrencyInfo>({ code: "USD", rate: 1, symbol: "$" });
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [hasLoadedUsageData, setHasLoadedUsageData] = useState(false);
 
@@ -177,6 +181,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setBuckets(response.buckets);
       setSessions(response.sessions ?? []);
       setHasAnyData(response.hasAnyData);
+      if (response.currency) setCurrency(response.currency);
     } catch (err) {
       // Silently fail — dashboard shows stale data or empty state (mirrors macOS).
       console.warn("Failed to fetch usage data:", err);
@@ -306,6 +311,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   // Push tray stats (cost + tokens for the ACTIVE range, no filters) —
   // mirrors AppState.menuBarCost/menuBarTokens incl. the `.today` cutoff.
+  // Cost converts to the active display currency from the usage response.
   useEffect(() => {
     if (!configured || buckets.length === 0) return;
     const cutoff = startCutoff(timeRange);
@@ -319,8 +325,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       cost += b.estimatedCost ?? 0;
       tokens += computedTotal(b);
     }
-    void invoke("update_tray_stats", { cost, tokens }).catch(() => {});
-  }, [configured, buckets, timeRange]);
+    void invoke("update_tray_stats", { cost: cost * currency.rate, tokens }).catch(() => {});
+  }, [configured, buckets, timeRange, currency]);
 
   const isInitialDataLoad = isLoadingData && !hasLoadedUsageData && buckets.length === 0;
   const isRefreshingData = isLoadingData && hasLoadedUsageData;
@@ -331,6 +337,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     configured,
     buckets,
     sessions,
+    currency,
     hasAnyData,
     isLoadingData,
     hasLoadedUsageData,

@@ -23,23 +23,38 @@ export const api = {
    *  outcome (ok or error) is reported instead of silently falling back. */
   getPricingStatus: (force: boolean) => invoke<PricingStatus>("get_pricing_status", { force }),
 
-  /** Add or partially override a custom model price (USD per million
-   *  tokens). Returns the updated pricing status. */
+  /** Add or partially override a custom model price — average mode (one
+   *  price for all token categories) or detailed per-field values, in the
+   *  given currency per million tokens. Returns the updated status. */
   setCustomPrice: (
     model: string,
-    inputPerM?: number | null,
-    outputPerM?: number | null,
-    cacheReadPerM?: number | null,
+    opts: {
+      avgPerM?: number | null;
+      inputPerM?: number | null;
+      outputPerM?: number | null;
+      cacheReadPerM?: number | null;
+      currency?: string | null;
+    },
   ) =>
     invoke<PricingStatus>("set_custom_price", {
       model,
-      inputPerM: inputPerM ?? null,
-      outputPerM: outputPerM ?? null,
-      cacheReadPerM: cacheReadPerM ?? null,
+      avgPerM: opts.avgPerM ?? null,
+      inputPerM: opts.inputPerM ?? null,
+      outputPerM: opts.outputPerM ?? null,
+      cacheReadPerM: opts.cacheReadPerM ?? null,
+      currency: opts.currency ?? null,
     }),
 
   /** Remove a custom model price. Returns the updated pricing status. */
   removeCustomPrice: (model: string) => invoke<PricingStatus>("remove_custom_price", { model }),
+
+  /** Set the display currency. Returns the updated pricing status. */
+  setDisplayCurrency: (currency: string) =>
+    invoke<PricingStatus>("set_display_currency", { currency }),
+
+  /** Set a currency exchange rate (1 USD = ? CODE). */
+  setCurrencyRate: (currency: string, perUsd: number) =>
+    invoke<PricingStatus>("set_currency_rate", { currency, perUsd }),
 
   // Sync ---------------------------------------------------------------------
   triggerSync: () => invoke<void>("trigger_sync"),

@@ -222,8 +222,12 @@ export async function run(rawArgs) {
     npx @vibe-cafe/vibe-usage summary --days N   Same, but over the last N days (1-90)
     npx @vibe-cafe/vibe-usage usage [--days N | --from <ISO> | --from-date <D> --to-date <D>]  Local usage as JSON
     npx @vibe-cafe/vibe-usage prices [--refresh]  Show price-table status (source/freshness/model coverage)
-    npx @vibe-cafe/vibe-usage prices set <model> [--input|--output|--cache-read <USD/M>]  Add/override a custom model price
+    npx @vibe-cafe/vibe-usage prices set <model> --avg <price> [--currency CODE]  Custom average price (all tokens, any currency)
+    npx @vibe-cafe/vibe-usage prices set <model> [--input|--output|--cache-read <price>] [--currency CODE]  Custom per-field price
     npx @vibe-cafe/vibe-usage prices unset <model>  Remove a custom model price
+    npx @vibe-cafe/vibe-usage prices currency [CODE]  Show/set the display currency
+    npx @vibe-cafe/vibe-usage prices rate [<CODE> <perUSD>]  Show/set exchange rates
+    npx @vibe-cafe/vibe-usage summary --currency CODE  Render costs in another currency
     npx @vibe-cafe/vibe-usage daemon       Continuous sync (every 30m, foreground)
     npx @vibe-cafe/vibe-usage daemon install    Install background service (systemd/launchd)
     npx @vibe-cafe/vibe-usage daemon uninstall  Remove background service

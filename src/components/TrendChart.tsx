@@ -14,6 +14,7 @@ import {
 } from "../lib/aggregate";
 import {
   formatCost,
+  formatCostIn,
   formatDateShort,
   formatDuration,
   formatHourShort,
@@ -117,6 +118,8 @@ function ChartContent({
   maxActiveMinutes: number;
   visibleLabelIndices: number[];
 }) {
+  const { currency } = useAppState();
+  const fmtCost = (usd: number) => formatCostIn(usd, currency);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const plotRef = useRef<HTMLDivElement>(null);
 
@@ -124,7 +127,7 @@ function ChartContent({
     chartMode === "token"
       ? formatNumber(maxTotal)
       : chartMode === "cost"
-        ? formatCost(maxCost)
+        ? fmtCost(maxCost)
         : formatDuration(Math.floor(maxActiveMinutes * 60));
 
   const onMove = (e: React.MouseEvent) => {

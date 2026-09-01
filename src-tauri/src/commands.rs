@@ -55,21 +55,34 @@ pub async fn get_pricing_status(app: AppHandle, force: bool) -> Result<Value, St
 
 // -- Custom prices ---------------------------------------------------------------
 
-/// Add or partially override a custom model price (USD per million tokens).
-/// Returns the updated pricing status.
+/// Add or partially override a custom model price. Either an average price
+/// (one price for all token categories) or per-field values, in the given
+/// currency (default USD) per million tokens. Returns the updated status.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn set_custom_price(
     app: AppHandle,
     model: String,
+    avg_per_m: Option<f64>,
     input_per_m: Option<f64>,
     output_per_m: Option<f64>,
     cache_read_per_m: Option<f64>,
+    currency: Option<String>,
 ) -> Result<Value, String> {
     let model = model.trim().to_string();
     if model.is_empty() {
         return Err("模型名不能为空".into());
     }
-    usage_reader::set_custom_price(&app, &model, input_per_m, output_per_m, cache_read_per_m).await
+    usage_reader::set_custom_price(
+        &app,
+        &model,
+        avg_per_m,
+        input_per_m,
+        output_per_m,
+        cache_read_per_m,
+        currency.as_deref(),
+    )
+    .await
 }
 
 /// Remove a custom model price. Returns the updated pricing status.
@@ -80,6 +93,32 @@ pub async fn remove_custom_price(app: AppHandle, model: String) -> Result<Value,
         return Err("模型名不能为空".into());
     }
     usage_reader::unset_custom_price(&app, &model).await
+}
+
+/// Set the display currency (summary/dashboard rendering). Returns the
+/// updated pricing status.
+#[tauri::command]
+pub async fn set_display_currency(app: AppHandle, currency: String) -> Result<Value, String> {
+    let code = currency.trim().to_string();
+    if code.is_empty() {
+        return Err("货币代码不能为空".into());
+    }
+    usage_reader::set_display_currency(&app, &code).await
+}
+
+/// Set a currency exchange rate (1 USD = ? CODE). Returns the updated
+/// pricing status.
+#[tauri::command]
+pub async fn set_currency_rate(
+    app: AppHandle,
+    currency: String,
+    per_usd: f64,
+) -> Result<Value, String> {
+    let code = currency.trim().to_string();
+    if code.is_empty() {
+        return Err("货币代码不能为空".into());
+    }
+    usage_reader::set_currency_rate(&app, &code, per_usd).await
 }
 
 // -- Sync ---------------------------------------------------------------------

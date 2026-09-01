@@ -36,6 +36,20 @@ const CUSTOM_FIELDS = [
   'cache_read_input_token_cost',
 ];
 
+// ── Currency ────────────────────────────────────────────────────────────
+// All cost math happens in USD; user-facing prices may be entered and
+// displayed in another currency via per-currency USD rates. Only CNY ships
+// with a default rate (rough, offline-safe); any other currency must be
+// configured explicitly via `prices rate <CODE> <value>`.
+
+const DEFAULT_RATES = { CNY: 7.2 };
+export { DEFAULT_RATES };
+const CURRENCY_SYMBOLS = { USD: '$', CNY: '¥', EUR: '€', JPY: '¥', GBP: '£', KRW: '₩', HKD: 'HK$', TWD: 'NT$' };
+
+export function currencySymbol(code) {
+  return CURRENCY_SYMBOLS[code] ?? `${code} `;
+}
+
 export function getSnapshotTable() {
   return {
     fetchedAt: snapshot.fetchedAt,
@@ -128,33 +142,118 @@ export async function getPriceTable({ force = false } = {}) {
 
 // ── Custom price overrides ──────────────────────────────────────────────
 
-// User-defined overrides, keyed by lowercase model name. Values use the same
-// per-token schema as the price table. A corrupt file must never break cost
-// estimation — it is ignored.
-export function loadCustomPrices() {
+// User-defined overrides, stored in ~/.vibe-usage/prices-custom.json:
+//   { "currency": "CNY", "rates": { "CNY": 7.3 }, "models": { "<name>": {
+//       "mode": "avg" | "detailed", "currency": "CNY",
+//       "avg_per_m": 2                      // avg mode: one price for ALL tokens
+//       "input_per_m" | "output_per_m" | "cache_read_per_m"   // detailed mode
+//   } } }
+// Values are in the entry's currency per million tokens. Legacy files (a
+// bare per-token USD map at the top level) are read as detailed USD entries.
+// A corrupt file must never break cost estimation — it is ignored.
+
+function readCustomFile() {
+  const empty = { currency: 'USD', rates: {}, models: {} };
   try {
-    if (!existsSync(CUSTOM_FILE)) return {};
+    if (!existsSync(CUSTOM_FILE)) return empty;
     const parsed = JSON.parse(readFileSync(CUSTOM_FILE, 'utf-8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const out = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (!value || typeof value !== 'object') continue;
-      const entry = {};
-      for (const field of CUSTOM_FIELDS) {
-        const n = Number(value[field]);
-        if (Number.isFinite(n) && n >= 0) entry[field] = n;
-      }
-      if (Object.keys(entry).length > 0) out[String(key).trim().toLowerCase()] = entry;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty;
+    if (parsed.models && typeof parsed.models === 'object') {
+      return {
+        currency: typeof parsed.currency === 'string' ? parsed.currency : 'USD',
+        rates: sanitizeRates(parsed.rates),
+        models: parsed.models,
+      };
     }
-    return out;
+    // Legacy bare map → detailed USD entries.
+    return { currency: 'USD', rates: {}, models: parsed };
   } catch {
-    return {};
+    return empty;
   }
 }
 
-export function saveCustomPrices(custom) {
+// Same shape as readCustomFile, but always mutable-fresh (command layer).
+export function readCustomFileDirect() {
+  return readCustomFile();
+}
+
+function sanitizeRates(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [code, value] of Object.entries(raw)) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) out[String(code).trim().toUpperCase()] = n;
+  }
+  return out;
+}
+
+// USD per 1 unit of `code` under the current configuration. Unknown codes
+// (not USD, no user rate, no default) have no rate.
+export function currencyRate(code, file = readCustomFile()) {
+  const c = String(code || 'USD').trim().toUpperCase();
+  if (c === 'USD') return 1;
+  return file.rates[c] ?? DEFAULT_RATES[c] ?? null;
+}
+
+// Save the file-level custom structure (display currency / rates / models).
+export function saveCustomFile(file) {
   mkdirSync(STORE_DIR, { recursive: true });
-  writeFileSync(CUSTOM_FILE, JSON.stringify(custom, null, 2) + '\n', 'utf-8');
+  writeFileSync(CUSTOM_FILE, JSON.stringify(file, null, 2) + '\n', 'utf-8');
+}
+
+// Expand custom entries into USD per-token prices layered over the table.
+// `avg` mode applies one price to every token category (input, output,
+// reasoning, cache reads); partial detailed entries merge per field with the
+// base table. Entries whose currency has no known rate are skipped.
+export function loadCustomPrices() {
+  const file = readCustomFile();
+  const out = {};
+  for (const [rawName, entry] of Object.entries(file.models)) {
+    const name = String(rawName).trim().toLowerCase();
+    if (!name || !entry || typeof entry !== 'object') continue;
+    const currency = String(entry.currency || 'USD').trim().toUpperCase();
+    const rate = currencyRate(currency, file);
+    if (!rate) continue;
+    const fields = {};
+    const mode = entry.mode === 'avg' ? 'avg' : 'detailed';
+    if (mode === 'avg') {
+      const n = Number(entry.avg_per_m);
+      if (!Number.isFinite(n) || n < 0) continue;
+      const perToken = n / 1e6 / rate;
+      for (const field of CUSTOM_FIELDS) fields[field] = perToken;
+    } else {
+      for (const [key, field] of [
+        ['input_per_m', 'input_cost_per_token'],
+        ['output_per_m', 'output_cost_per_token'],
+        ['cache_read_per_m', 'cache_read_input_token_cost'],
+        // Legacy per-token keys (pre-currency format).
+        ['input_cost_per_token', 'input_cost_per_token'],
+        ['output_cost_per_token', 'output_cost_per_token'],
+        ['cache_read_input_token_cost', 'cache_read_input_token_cost'],
+      ]) {
+        const n = Number(entry[key]);
+        if (!Number.isFinite(n) || n < 0) continue;
+        fields[field] = key.endsWith('_per_token') ? n / rate : n / 1e6 / rate;
+      }
+      if (Object.keys(fields).length === 0) continue;
+    }
+    out[name] = fields;
+  }
+  return out;
+}
+
+// Display-currency metadata for summary/usage/desktop rendering.
+export function getPricingMeta({ currency } = {}) {
+  const file = readCustomFile();
+  const code = String(currency || file.currency || 'USD').trim().toUpperCase();
+  const rate = currencyRate(code, file);
+  return {
+    code,
+    rate: rate ?? 1,
+    symbol: currencySymbol(code),
+    hasRate: rate !== null,
+    rates: { ...DEFAULT_RATES, ...file.rates },
+  };
 }
 
 // Layer custom overrides over a resolved table. Partial entries merge per
@@ -204,6 +303,7 @@ export async function loadPricing({ refresh = false, local = false } = {}) {
 
   const custom = loadCustomPrices();
   const effective = withCustomPrices(table);
+  const meta = getPricingMeta();
   const status = {
     source: table.source,
     fetchedAt: table.fetchedAt,
@@ -211,8 +311,10 @@ export async function loadPricing({ refresh = false, local = false } = {}) {
     offline,
     refresh: refreshState,
     customCount: Object.keys(custom).length,
+    currency: { code: meta.code, rate: meta.rate, symbol: meta.symbol, hasRate: meta.hasRate },
+    rates: meta.rates,
   };
-  return { status, table: effective, custom };
+  return { status, table: effective, custom, meta };
 }
 
 export async function getPricingStatus(opts = {}) {

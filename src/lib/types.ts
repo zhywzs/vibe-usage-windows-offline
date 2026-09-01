@@ -76,6 +76,8 @@ export interface UsageResponse {
   buckets: UsageBucket[];
   sessions?: UsageSession[] | null;
   hasAnyData: boolean;
+  /** Display currency for cost rendering (estimatedCost stays USD). */
+  currency?: CurrencyInfo | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,9 +240,21 @@ export interface PricingRefreshState {
   error: string | null;
 }
 
-/** A user-defined custom price override, in USD per million tokens. */
+/** Active display currency (all cost math is USD; rendering converts). */
+export interface CurrencyInfo {
+  code: string;
+  rate: number;
+  symbol: string;
+}
+
+/** A user-defined custom price override. `avg` mode applies one price to
+ *  every token category; `detailed` sets per-field prices. Values are in
+ *  the entry's currency per million tokens. */
 export interface CustomPriceEntry {
   model: string;
+  mode: "avg" | "detailed";
+  currency: string;
+  avgPerM?: number | null;
   inputPerM?: number | null;
   outputPerM?: number | null;
   cacheReadPerM?: number | null;
@@ -254,6 +268,9 @@ export interface PricingStatus {
   refresh: PricingRefreshState;
   customCount: number;
   custom: CustomPriceEntry[];
+  currency: CurrencyInfo;
+  /** code → per-USD rate, merged defaults + user overrides. */
+  rates: Record<string, number>;
   coverage: {
     usedModelCount: number;
     pricedModels: string[];

@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { api, onSyncState } from "./lib/api";
-import { AppSettings, AppStatus, PricingStatus, SyncState } from "./lib/types";
+import { AppSettings, AppStatus, CustomPriceEntry, PricingStatus, SyncState } from "./lib/types";
 import { formatRelativeTime } from "./lib/formatters";
 
 export function SettingsApp() {
@@ -21,12 +21,17 @@ export function SettingsApp() {
   const [priceEditor, setPriceEditor] = useState<{
     origModel: string | null;
     model: string;
+    mode: "avg" | "detailed";
+    currency: string;
+    avg: string;
     input: string;
     output: string;
     cacheRead: string;
   } | null>(null);
   const [priceEditError, setPriceEditError] = useState<string | null>(null);
   const [priceBusy, setPriceBusy] = useState(false);
+  const [rateDraft, setRateDraft] = useState<string | null>(null);
+  const [rateEditError, setRateEditError] = useState<string | null>(null);
 
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -150,24 +155,35 @@ export function SettingsApp() {
       if (!Number.isFinite(n) || n < 0) throw new Error(`${label}价格无效: ${t}`);
       return n;
     };
-    let input: number | null;
-    let output: number | null;
-    let cacheRead: number | null;
+    let avg: number | null = null;
+    let input: number | null = null;
+    let output: number | null = null;
+    let cacheRead: number | null = null;
     try {
-      input = parseField(priceEditor.input, "输入");
-      output = parseField(priceEditor.output, "输出");
-      cacheRead = parseField(priceEditor.cacheRead, "缓存读");
+      if (priceEditor.mode === "avg") {
+        avg = parseField(priceEditor.avg, "平均");
+      } else {
+        input = parseField(priceEditor.input, "输入");
+        output = parseField(priceEditor.output, "输出");
+        cacheRead = parseField(priceEditor.cacheRead, "缓存读");
+      }
     } catch (err) {
       setPriceEditError(err instanceof Error ? err.message : String(err));
       return;
     }
-    if (input === null && output === null && cacheRead === null) {
-      setPriceEditError("至少填写一个价格");
+    if (avg === null && input === null && output === null && cacheRead === null) {
+      setPriceEditError(priceEditor.mode === "avg" ? "请填写平均价格" : "至少填写一个价格");
       return;
     }
     setPriceBusy(true);
     try {
-      const next = await api.setCustomPrice(model, input, output, cacheRead);
+      const next = await api.setCustomPrice(model, {
+        avgPerM: avg,
+        inputPerM: input,
+        outputPerM: output,
+        cacheReadPerM: cacheRead,
+        currency: priceEditor.currency,
+      });
       setPricing(next);
       setPriceEditor(null);
       setPricingMessageIsError(false);
@@ -176,6 +192,45 @@ export function SettingsApp() {
       setPriceEditError(String(err));
     } finally {
       setPriceBusy(false);
+    }
+  };
+
+  const setDisplayCurrency = async (code: string) => {
+    if (!pricing || code === pricing.currency.code) return;
+    setPricingBusy(true);
+    setPricingMessage(null);
+    try {
+      const next = await api.setDisplayCurrency(code);
+      setPricing(next);
+      setPricingMessageIsError(false);
+      setPricingMessage(`显示货币已切换为 ${code}`);
+    } catch (err) {
+      setPricingMessageIsError(true);
+      setPricingMessage(String(err));
+    } finally {
+      setPricingBusy(false);
+    }
+  };
+
+  const saveCurrencyRate = async (code: string, raw: string) => {
+    setRateEditError(null);
+    const n = Number(raw.trim());
+    if (!Number.isFinite(n) || n <= 0) {
+      setRateEditError(`汇率无效: ${raw}（应为正数字，含义 1 USD = ? ${code}）`);
+      return;
+    }
+    setPricingBusy(true);
+    setPricingMessage(null);
+    try {
+      const next = await api.setCurrencyRate(code, n);
+      setPricing(next);
+      setRateDraft(null);
+      setPricingMessageIsError(false);
+      setPricingMessage(`已设置 1 USD = ${n} ${code}`);
+    } catch (err) {
+      setRateEditError(String(err));
+    } finally {
+      setPricingBusy(false);
     }
   };
 
@@ -288,7 +343,16 @@ export function SettingsApp() {
               )}
               <SmallButton
                 onClick={() =>
-                  setPriceEditor({ origModel: null, model: "", input: "", output: "", cacheRead: "" })
+                  setPriceEditor({
+                    origModel: null,
+                    model: "",
+                    mode: "avg",
+                    currency: pricing?.currency.code ?? "USD",
+                    avg: "",
+                    input: "",
+                    output: "",
+                    cacheRead: "",
+                  })
                 }
               >
                 添加
@@ -312,15 +376,20 @@ export function SettingsApp() {
                 <span
                   className="text-xs"
                   style={{ color: "#9E9E9E" }}
-                  title={`输入 ${fmtPerM(entry.inputPerM)} · 输出 ${fmtPerM(entry.outputPerM)} · 缓存读 ${fmtPerM(entry.cacheReadPerM)} 美元/百万 tokens`}
+                  title={customEntryTitle(entry)}
                 >
-                  {fmtPerM(entry.inputPerM)} / {fmtPerM(entry.outputPerM)}
+                  {entry.mode === "avg"
+                    ? `均价 ${fmtPrice(entry.avgPerM, entry.currency)}`
+                    : `${fmtPrice(entry.inputPerM, entry.currency)} / ${fmtPrice(entry.outputPerM, entry.currency)}`}
                 </span>
                 <SmallButton
                   onClick={() =>
                     setPriceEditor({
                       origModel: entry.model,
                       model: entry.model,
+                      mode: entry.mode,
+                      currency: entry.currency,
+                      avg: entry.avgPerM?.toString() ?? "",
                       input: entry.inputPerM?.toString() ?? "",
                       output: entry.outputPerM?.toString() ?? "",
                       cacheRead: entry.cacheReadPerM?.toString() ?? "",
@@ -335,38 +404,89 @@ export function SettingsApp() {
           ))}
           {priceEditor && (
             <div className="flex flex-col gap-2 px-3 py-2.5" style={{ background: "#1C1C1E" }}>
-              <input
-                value={priceEditor.model}
-                disabled={!!priceEditor.origModel}
-                placeholder="模型名，如 glm-5.3"
-                onChange={(e) => setPriceEditor({ ...priceEditor, model: e.target.value })}
-                className="rounded-md px-2 py-1 font-mono text-xs outline-none"
-                style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
-              />
-              <div className="grid grid-cols-3 gap-2">
+              <div className="flex gap-2">
+                <input
+                  value={priceEditor.model}
+                  disabled={!!priceEditor.origModel}
+                  placeholder="模型名，如 glm-5.3"
+                  onChange={(e) => setPriceEditor({ ...priceEditor, model: e.target.value })}
+                  className="min-w-0 grow rounded-md px-2 py-1 font-mono text-xs outline-none"
+                  style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
+                />
+                <select
+                  value={priceEditor.currency}
+                  onChange={(e) => setPriceEditor({ ...priceEditor, currency: e.target.value })}
+                  className="rounded-md px-1.5 py-1 text-xs outline-none"
+                  style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
+                >
+                  {CURRENCY_OPTIONS.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex gap-1.5">
                 {(
                   [
-                    ["输入", "input"],
-                    ["输出", "output"],
-                    ["缓存读", "cacheRead"],
+                    ["平均价", "avg"],
+                    ["分项", "detailed"],
                   ] as const
-                ).map(([label, field]) => (
-                  <label key={field} className="flex flex-col gap-1">
-                    <span className="text-[10px]" style={{ color: "#8C8C8C" }}>
-                      {label} $/M
-                    </span>
-                    <input
-                      value={priceEditor[field]}
-                      placeholder="—"
-                      onChange={(e) => setPriceEditor({ ...priceEditor, [field]: e.target.value })}
-                      className="rounded-md px-2 py-1 text-xs outline-none"
-                      style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
-                    />
-                  </label>
+                ).map(([label, mode]) => (
+                  <button
+                    key={mode}
+                    onClick={() => setPriceEditor({ ...priceEditor, mode })}
+                    className="rounded-md px-2.5 py-1 text-xs"
+                    style={{
+                      background: priceEditor.mode === mode ? "#5A5A5C" : "#2A2A2C",
+                      color: priceEditor.mode === mode ? "#E8E8E8" : "#9E9E9E",
+                    }}
+                  >
+                    {label}
+                  </button>
                 ))}
               </div>
+              {priceEditor.mode === "avg" ? (
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px]" style={{ color: "#8C8C8C" }}>
+                    平均价格 {priceEditor.currency}/M tokens（所有类型 token 统一计价）
+                  </span>
+                  <input
+                    value={priceEditor.avg}
+                    placeholder="—"
+                    onChange={(e) => setPriceEditor({ ...priceEditor, avg: e.target.value })}
+                    className="rounded-md px-2 py-1 text-xs outline-none"
+                    style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
+                  />
+                </label>
+              ) : (
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      ["输入", "input"],
+                      ["输出", "output"],
+                      ["缓存读", "cacheRead"],
+                    ] as const
+                  ).map(([label, field]) => (
+                    <label key={field} className="flex flex-col gap-1">
+                      <span className="text-[10px]" style={{ color: "#8C8C8C" }}>
+                        {label} {priceEditor.currency}/M
+                      </span>
+                      <input
+                        value={priceEditor[field]}
+                        placeholder="—"
+                        onChange={(e) => setPriceEditor({ ...priceEditor, [field]: e.target.value })}
+                        className="rounded-md px-2 py-1 text-xs outline-none"
+                        style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
               <span className="text-[10px]" style={{ color: "#737373" }}>
-                单位: 美元/百万 tokens。留空的字段沿用价格表原值（新模型则视为 0）。
+                单位: {priceEditor.currency}/百万 tokens。平均价对所有 token 统一计价；分项模式留空的字段沿用价格表原值（新模型则视为 0）。
+                {priceEditor.currency !== "USD" &&
+                  ` 当前汇率 1 USD = ${pricing?.rates[priceEditor.currency] ?? "?"} ${priceEditor.currency}`}
               </span>
               {priceEditError && <span className="text-xs text-red-400">{priceEditError}</span>}
               <div className="flex justify-end gap-2">
@@ -387,6 +507,50 @@ export function SettingsApp() {
                 </button>
               </div>
             </div>
+          )}
+
+          {/* 显示货币与汇率 */}
+          <Row label="显示货币">
+            <div className="flex items-center gap-2">
+              <span className="text-xs" style={{ color: "#9E9E9E" }}>
+                {pricing ? `${pricing.currency.symbol} ${pricing.currency.code}` : ""}
+              </span>
+              <select
+                value={pricing?.currency.code ?? "USD"}
+                disabled={!pricing}
+                onChange={(e) => void setDisplayCurrency(e.target.value)}
+                className="rounded-md px-1.5 py-1 text-xs outline-none"
+                style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
+              >
+                {CURRENCY_OPTIONS.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </Row>
+          {pricing && pricing.currency.code !== "USD" && (
+            <Row label={`汇率 (1 USD = ? ${pricing.currency.code})`}>
+              <div className="flex items-center gap-2">
+                <input
+                  value={rateDraft ?? String(pricing.currency.rate)}
+                  placeholder={String(pricing.currency.rate)}
+                  onChange={(e) => setRateDraft(e.target.value)}
+                  className="w-24 rounded-md px-2 py-1 text-xs outline-none"
+                  style={{ background: "#0F0F0F", color: "#E8E8E8", border: "1px solid #3A3A3C" }}
+                />
+                <SmallButton
+                  disabled={pricingBusy || rateDraft === null}
+                  onClick={() => void saveCurrencyRate(pricing.currency.code, rateDraft ?? "")}
+                >
+                  保存汇率
+                </SmallButton>
+              </div>
+            </Row>
+          )}
+          {rateEditError && (
+            <div className="px-3 py-2 text-xs text-red-400">{rateEditError}</div>
           )}
 
           <Row label="网络刷新">
@@ -424,7 +588,16 @@ export function SettingsApp() {
                   className="font-mono underline"
                   style={{ color: "#8C8C8C" }}
                   onClick={() =>
-                    setPriceEditor({ origModel: null, model: m, input: "", output: "", cacheRead: "" })
+                    setPriceEditor({
+                      origModel: null,
+                      model: m,
+                      mode: "avg",
+                      currency: pricing.currency.code,
+                      avg: "",
+                      input: "",
+                      output: "",
+                      cacheRead: "",
+                    })
                   }
                 >
                   {m}
@@ -619,6 +792,15 @@ function pricingSourceLabel(source: PricingStatus["source"]): string {
   }
 }
 
-function fmtPerM(v?: number | null): string {
-  return v == null ? "—" : String(v);
+const CURRENCY_OPTIONS = ["USD", "CNY", "EUR", "JPY", "GBP", "HKD", "KRW", "TWD"];
+
+function fmtPrice(v: number | null | undefined, currency: string): string {
+  return v == null ? "—" : `${v} ${currency}/M`;
+}
+
+function customEntryTitle(entry: CustomPriceEntry): string {
+  if (entry.mode === "avg") {
+    return `平均价 ${fmtPrice(entry.avgPerM, entry.currency)}（所有 token 统一计价）`;
+  }
+  return `输入 ${fmtPrice(entry.inputPerM, entry.currency)} · 输出 ${fmtPrice(entry.outputPerM, entry.currency)} · 缓存读 ${fmtPrice(entry.cacheReadPerM, entry.currency)}`;
 }

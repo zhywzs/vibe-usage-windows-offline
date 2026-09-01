@@ -6,7 +6,7 @@ import { useAppState } from "../state/AppStateContext";
 import { aggregateSlices, filterBuckets, SliceData } from "../lib/aggregate";
 import {
   formatCenterTokens,
-  formatCost,
+  formatCostIn,
   formatNumber,
   formatSlicePercent,
 } from "../lib/formatters";
@@ -44,6 +44,8 @@ function DonutCard({
   buckets: UsageBucket[];
   keyFn: (b: UsageBucket) => string;
 }) {
+  const { currency } = useAppState();
+  const fmtCost = (usd: number) => formatCostIn(usd, currency);
   const [mode, setMode] = useState<MetricMode>("tokens");
   const slices = useMemo(() => aggregateSlices(buckets, keyFn), [buckets, keyFn]);
 
@@ -82,7 +84,7 @@ function DonutCard({
                   style={{ color: "#B3B3B3" }}
                 />
                 <span className="shrink-0 font-mono text-[11px]" style={{ color: "#8C8C8C" }}>
-                  {mode === "tokens" ? formatNumber(slice.tokens) : formatCost(slice.cost)}
+                  {mode === "tokens" ? formatNumber(slice.tokens) : fmtCost(slice.cost)}
                 </span>
                 <span
                   className="w-[42px] shrink-0 text-right font-mono text-[11px] text-t-tertiary"
@@ -135,6 +137,8 @@ function Donut({
   mode: MetricMode;
   total: number;
 }) {
+  const { currency } = useAppState();
+  const fmtCost = (usd: number) => formatCostIn(usd, currency);
   const r = DONUT_SIZE / 2 - STROKE_WIDTH / 2;
   const c = DONUT_SIZE / 2;
   const circumference = 2 * Math.PI * r;
@@ -149,7 +153,7 @@ function Donut({
     return seg;
   });
 
-  const centerLabel = mode === "tokens" ? formatCenterTokens(total) : formatCost(total);
+  const centerLabel = mode === "tokens" ? formatCenterTokens(total) : fmtCost(total);
 
   return (
     <div className="relative" style={{ width: DONUT_SIZE, height: DONUT_SIZE }}>

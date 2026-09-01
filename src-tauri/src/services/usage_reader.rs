@@ -58,27 +58,45 @@ pub async fn fetch_pricing_status(app: &AppHandle, force: bool) -> Result<Value,
     run_cli_json(app, &args, "查询价格表失败").await
 }
 
-/// Set (add or partially override) a custom model price. Values are USD per
-/// million tokens. Returns the updated pricing status JSON.
+/// Set (add or partially override) a custom model price. Either `avg_per_m`
+/// (one price for every token category, volume-billing style) or any of the
+/// detailed per-field values, in `currency` per million tokens (default USD).
+/// Returns the updated pricing status JSON.
+#[allow(clippy::too_many_arguments)]
 pub async fn set_custom_price(
     app: &AppHandle,
     model: &str,
+    avg_per_m: Option<f64>,
     input_per_m: Option<f64>,
     output_per_m: Option<f64>,
     cache_read_per_m: Option<f64>,
+    currency: Option<&str>,
 ) -> Result<Value, String> {
     let mut args = vec!["prices".to_string(), "set".to_string(), model.to_string()];
+    let has_avg = avg_per_m.is_some();
+    let has_detailed = input_per_m.is_some() || output_per_m.is_some() || cache_read_per_m.is_some();
+    if has_avg && has_detailed {
+        return Err("--avg 不能与详细价格同时使用".into());
+    }
     for (flag, value) in [
+        ("--avg", avg_per_m),
         ("--input", input_per_m),
         ("--output", output_per_m),
         ("--cache-read", cache_read_per_m),
     ] {
         if let Some(v) = value {
             if !v.is_finite() || v < 0.0 {
-                return Err("价格必须为非负数字（美元/百万 tokens）".into());
+                return Err("价格必须为非负数字（每百万 tokens）".into());
             }
             args.push(flag.to_string());
             args.push(format!("{v}"));
+        }
+    }
+    if let Some(code) = currency {
+        let code = code.trim();
+        if !code.is_empty() {
+            args.push("--currency".to_string());
+            args.push(code.to_string());
         }
     }
     run_cli_json(app, &args, "设置自定义价格失败").await
@@ -88,6 +106,26 @@ pub async fn set_custom_price(
 pub async fn unset_custom_price(app: &AppHandle, model: &str) -> Result<Value, String> {
     let args = vec!["prices".to_string(), "unset".to_string(), model.to_string()];
     run_cli_json(app, &args, "删除自定义价格失败").await
+}
+
+/// Show/set the display currency (`prices currency [CODE]`).
+pub async fn set_display_currency(app: &AppHandle, code: &str) -> Result<Value, String> {
+    let args = vec!["prices".to_string(), "currency".to_string(), code.to_string()];
+    run_cli_json(app, &args, "设置显示货币失败").await
+}
+
+/// Set a currency exchange rate (`prices rate <CODE> <perUSD>`).
+pub async fn set_currency_rate(app: &AppHandle, code: &str, per_usd: f64) -> Result<Value, String> {
+    if !per_usd.is_finite() || per_usd <= 0.0 {
+        return Err("汇率必须为正数字（1 USD = ? 该货币）".into());
+    }
+    let args = vec![
+        "prices".to_string(),
+        "rate".to_string(),
+        code.to_string(),
+        format!("{per_usd}"),
+    ];
+    run_cli_json(app, &args, "设置汇率失败").await
 }
 
 async fn run_cli_json(app: &AppHandle, args: &[String], context: &str) -> Result<Value, String> {

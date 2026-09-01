@@ -5,13 +5,13 @@ import { useAppState } from "../state/AppStateContext";
 import { filterBuckets, filterSessions, summarize } from "../lib/aggregate";
 import {
   formatChineseTokens,
-  formatCnyCost,
   formatCost,
+  formatCostIn,
   formatDuration,
   formatNumber,
 } from "../lib/formatters";
 
-type CurrencyMode = "usd" | "cny";
+type CurrencyMode = "usd" | "display";
 type TokenMode = "international" | "chinese";
 
 function formatExactInteger(value: number): string {
@@ -20,7 +20,7 @@ function formatExactInteger(value: number): string {
 
 export function SummaryCards() {
   const state = useAppState();
-  const [currencyMode, setCurrencyMode] = useState<CurrencyMode>("usd");
+  const [currencyMode, setCurrencyMode] = useState<CurrencyMode>("display");
   const [totalTokenMode, setTotalTokenMode] = useState<TokenMode>("international");
   const [cachedTokenMode, setCachedTokenMode] = useState<TokenMode>("international");
 
@@ -30,16 +30,29 @@ export function SummaryCards() {
     return summarize(buckets, sessions);
   }, [state.buckets, state.sessions, state.filters, state.timeRange]);
 
+  const hasDisplayCurrency = state.currency.code !== "USD" && state.currency.rate > 0;
+  const costText =
+    currencyMode === "display" && hasDisplayCurrency
+      ? formatCostIn(totals.totalCost, state.currency)
+      : formatCost(totals.totalCost);
+
   return (
     <div className="flex w-full items-start gap-2">
       <StatCard
         label="预估费用"
-        value={currencyMode === "usd" ? formatCost(totals.totalCost) : formatCnyCost(totals.totalCost)}
+        value={costText}
         color="#33CC80"
-        onClick={() => setCurrencyMode((mode) => (mode === "usd" ? "cny" : "usd"))}
-        pressed={currencyMode === "cny"}
-        title={`点击切换美元/人民币；精确值：${formatCost(totals.totalCost)}`}
-        ariaLabel={`预估费用，当前显示${currencyMode === "usd" ? "美元" : "人民币"}，点击切换；精确美元值 ${formatCost(totals.totalCost)}`}
+        onClick={() => {
+          if (!hasDisplayCurrency) return;
+          setCurrencyMode((mode) => (mode === "usd" ? "display" : "usd"));
+        }}
+        pressed={currencyMode === "display" && hasDisplayCurrency}
+        title={
+          hasDisplayCurrency
+            ? `点击切换美元/${state.currency.code}；精确值：${formatCost(totals.totalCost)}`
+            : `预估费用（显示货币可在 设置 → 价格表 中切换）`
+        }
+        ariaLabel={`预估费用；精确美元值 ${formatCost(totals.totalCost)}`}
       />
       <StatCard
         label="总 Token"

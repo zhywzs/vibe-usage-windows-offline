@@ -1,11 +1,23 @@
 import { loadStore, getStorePath } from './store.js';
-import { getPriceTable, estimateBucketCost } from './pricing.js';
+import { getPriceTable, estimateBucketCost, getPricingMeta } from './pricing.js';
 
 export async function runSummary(args = []) {
   const days = parseDays(args);
+  const currencyArg = parseCurrencyArg(args);
   const store = loadStore();
   const prices = await getPriceTable();
-  console.log(render(store, prices, days));
+  const meta = getPricingMeta({ currency: currencyArg });
+  console.log(render(store, prices, days, meta));
+}
+
+export function parseCurrencyArg(args) {
+  const idx = args.findIndex(a => a === '--currency');
+  if (idx === -1) return undefined;
+  const v = args[idx + 1];
+  if (v === undefined || v.startsWith('--')) {
+    throw new Error('Option --currency requires a value (e.g. CNY).');
+  }
+  return v;
 }
 
 export function parseDays(args) {
@@ -17,7 +29,7 @@ export function parseDays(args) {
   return v;
 }
 
-export function render(store, prices, days) {
+export function render(store, prices, days, meta = { code: 'USD', rate: 1, symbol: '$' }) {
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   const buckets = Object.values(store.buckets)
     .map(entry => entry.data)
@@ -25,6 +37,8 @@ export function render(store, prices, days) {
   const sessions = Object.values(store.sessions)
     .map(entry => entry.data)
     .filter(s => (s.lastMessageAt || '') >= cutoff);
+
+  const fmtCost = (usd) => `${meta.symbol}${(usd * meta.rate).toFixed(2)}`;
 
   if (buckets.length === 0) {
     return `# Vibe Usage Summary (Last ${days} ${days === 1 ? 'day' : 'days'})\n\n暂无数据。运行 \`npx @vibe-cafe/vibe-usage sync\` 从本地日志统计 token 用量。\n`;
@@ -59,7 +73,7 @@ export function render(store, prices, days) {
   const lines = [];
   lines.push(`# Vibe Usage Summary (Last ${days} ${days === 1 ? 'day' : 'days'})`);
   lines.push('');
-  lines.push(`**总览**: $${totalCost.toFixed(2)} · ${formatTokens(totalTokens)} tokens · ${sessions.length} sessions · ${activeHours.toFixed(1)}h active`);
+  lines.push(`**总览**: ${fmtCost(totalCost)} · ${formatTokens(totalTokens)} tokens · ${sessions.length} sessions · ${activeHours.toFixed(1)}h active`);
   lines.push('');
 
   lines.push('## 按模型');
@@ -68,7 +82,7 @@ export function render(store, prices, days) {
   lines.push('|---|---:|---:|---:|');
   for (const [model, { cost, tokens }] of topN(byModel, 'cost', 8)) {
     const pct = totalCost > 0 ? ((cost / totalCost) * 100).toFixed(0) : '0';
-    lines.push(`| ${model} | $${cost.toFixed(2)} | ${formatTokens(tokens)} | ${pct}% |`);
+    lines.push(`| ${model} | ${fmtCost(cost)} | ${formatTokens(tokens)} | ${pct}% |`);
   }
   lines.push('');
 
@@ -77,7 +91,7 @@ export function render(store, prices, days) {
   lines.push('| 项目 | 费用 | Sessions |');
   lines.push('|---|---:|---:|');
   for (const [project, { cost, sessions: ss }] of topN(byProject, 'cost', 8)) {
-    lines.push(`| ${project} | $${cost.toFixed(2)} | ${ss} |`);
+    lines.push(`| ${project} | ${fmtCost(cost)} | ${ss} |`);
   }
   lines.push('');
 
@@ -85,7 +99,7 @@ export function render(store, prices, days) {
     lines.push(`> 另有 ${formatTokens(unpricedTokens)} tokens 的模型无价格数据，未计入费用。`);
     lines.push('');
   }
-  lines.push(`数据: ${getStorePath()} · 价格表更新于 ${prices.fetchedAt?.slice(0, 10) || 'unknown'}（本地估算，仅供参考）`);
+  lines.push(`数据: ${getStorePath()} · 价格表更新于 ${prices.fetchedAt?.slice(0, 10) || 'unknown'}（本地估算，仅供参考${meta.code !== 'USD' ? `，汇率 1 USD = ${meta.rate} ${meta.code}` : ''}）`);
   return lines.join('\n');
 }
 
